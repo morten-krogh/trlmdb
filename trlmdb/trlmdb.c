@@ -86,12 +86,16 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 
 int  trlmdb_txn_commit(TRLMDB_txn *txn)
 {
-	return mdb_txn_commit(txn->mdb_txn);
+	int rc = mdb_txn_commit(txn->mdb_txn);
+	free(txn);
+
+	return rc;
 }
 
 void trlmdb_txn_abort(TRLMDB_txn *txn)
 {
 	mdb_txn_abort(txn->mdb_txn);
+	free(txn);
 }
 
 MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
@@ -112,31 +116,37 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_dbi dbi, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, dbi, key, data);
 }
 
-static MDB_val void *extended_key(const char* name, MDB_val *key)
+static int extended_key(const char* name, const MDB_val *key, MDB_val *ext_key)
 {
 	size_t len_name = strlen(name);
 	size_t size = len_name + 1 + key->mv_size;
-	void *ext_key = malloc(size);
-	if (!ext_key) return NULL;
+	void *data = malloc(size);
+	if (!data) return ENOMEM;
 
-	strcpy(ext_key, name);
-	memcpy(ext_key + len_name + 1, key->mv_data, key->mv_size);
+	strcpy(data, name);
+	memcpy(data + len_name + 1, key->mv_data, key->mv_size);
 
-	return ext_key;
+	ext_key->mv_size = size;
+	ext_key->mv_data = data;
+	
+	return 0;
 }
 
 /* put = 1 for put and put = 0 for del */
-static void *extended_time(u_int64_t time, u_int32_t random, int put)
+static int extended_time(u_int64_t time, u_int32_t random, int put, MDB_val *ext_time)
 {
-	void *ext_time = malloc(12);
-	if (!ext_time) return NULL;
+	void *data = malloc(12);
+	if (!data) return ENOMEM;
 
-	*(u_int64_t*)ext_time = time;
+	*(u_int64_t*)data = time;
 	u_int32_t last = put ? (random | 1) : (random | ~(u_int32_t)1);
 
-	*(u_int32_t*)(ext_time + 8) = last;
+	*(u_int32_t*)(data + 8) = last;
+
+	ext_time->mv_size = 12;
+	ext_time->mv_data = data;
 	
-	return ext_time;
+	return 0;
 }
 
 static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlmdb_recent_dbi, MDB_val *key, MDB_val *value)
@@ -151,38 +161,46 @@ static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlm
 
 int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
 {
-	void *ext_key = extended_key(name, key);
-	if (!ext_key) return ENOMEM;
+	int rc = 0;
 
-	void *ext_time = extended_time(txn->time, txn->env->random, 1);
-	if (!ext_time) return ENOMEM;
-
-	MDB_txn *child_txn;
-	int rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
+	MDB_val ext_key;
+	rc = extended_key(name, key, &ext_key);
 	if (!rc) return rc;
 
-	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, ext_key, ext_time);
-	if (!rc) {
-		mdb_txn_abort(child_txn);
-		return rc;
-	}
+	MDB_val ext_time;
+	rc = extended_time(txn->time, txn->env->random, 1, &ext_time);
+	if (!rc) goto cleanup_ext_key;
+
+	MDB_txn *child_txn;
+	rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
+	if (!rc) goto cleanup_ext_time;
+
+	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, &ext_key, &ext_time);
+	if (!rc) goto cleanup_child_txn;
 
 	rc = mdb_put(child_txn, dbi, key, data, 0); 
-	if (!rc) {
-		mdb_txn_abort(child_txn);
-		return rc;
-	}
+	if (!rc) goto cleanup_child_txn;
+
+	rc = mdb_txn_commit(child_txn);
+	goto cleanup_ext_time;
 	
-	return mdb_txn_commit(child_txn);	
+cleanup_child_txn:
+	mdb_txn_abort(child_txn);
+cleanup_ext_time:
+	free(ext_time.mv_data);
+cleanup_ext_key:
+	free(ext_key.mv_data);
+	
+	return rc;
 }
 
 int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key)
 {
-	void *ext_key = extended_key(name, key);
-	if (!ext_key) return ENOMEM;
+	/* void *ext_key = extended_key(name, key); */
+	/* if (!ext_key) return ENOMEM; */
 
-	void *ext_time = extended_time(txn->time, txn->env->random, 1);
-	if (!ext_time) return ENOMEM;
+	/* void *ext_time = extended_time(txn->time, txn->env->random, 1); */
+	/* if (!ext_time) return ENOMEM; */
 
 	
 }
