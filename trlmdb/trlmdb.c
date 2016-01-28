@@ -159,7 +159,8 @@ static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlm
 	return rc;
 }
 
-int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
+/* if data == NULL it is a delete operation otherwise a put operation */
+static int trlmdb_put_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
 {
 	int rc = 0;
 
@@ -168,7 +169,7 @@ int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB
 	if (!rc) return rc;
 
 	MDB_val ext_time;
-	rc = extended_time(txn->time, txn->env->random, 1, &ext_time);
+	rc = extended_time(txn->time, txn->env->random, data != NULL, &ext_time);
 	if (!rc) goto cleanup_ext_key;
 
 	MDB_txn *child_txn;
@@ -178,8 +179,13 @@ int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB
 	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, &ext_key, &ext_time);
 	if (!rc) goto cleanup_child_txn;
 
-	rc = mdb_put(child_txn, dbi, key, data, 0); 
-	if (!rc) goto cleanup_child_txn;
+	if (data) {
+		rc = mdb_put(child_txn, dbi, key, data, 0); 
+		if (!rc) goto cleanup_child_txn;
+	} else {
+		rc = mdb_del(child_txn, dbi, key, NULL);
+		if (!rc) goto cleanup_child_txn;
+	}
 
 	rc = mdb_txn_commit(child_txn);
 	goto cleanup_ext_time;
@@ -192,15 +198,14 @@ cleanup_ext_key:
 	free(ext_key.mv_data);
 	
 	return rc;
+}	
+
+int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
+{
+	return trlmdb_put_del(txn, name, dbi, key, data);
 }
 
 int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key)
 {
-	/* void *ext_key = extended_key(name, key); */
-	/* if (!ext_key) return ENOMEM; */
-
-	/* void *ext_time = extended_time(txn->time, txn->env->random, 1); */
-	/* if (!ext_time) return ENOMEM; */
-
-	
+	return trlmdb_put_del(txn, name, dbi, key, NULL);
 }
