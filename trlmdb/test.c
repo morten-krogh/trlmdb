@@ -3,59 +3,74 @@
 
 #include "trlmdb.h"
 
-
+void print_error(int rc)
+{
+	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
+	exit(rc);
+}
 
 int main (void)
 {
-	MDB_env *env;
+	int rc = 0;
+	TRLMDB_env *env;
 
-	mdb_env_create(&env);
-
-	mdb_env_set_maxdbs(env, 1);
+	rc = trlmdb_env_create(&env);
+	if (rc) print_error(rc); 
 	
-	int rc = mdb_env_open(env, "./testdb", 0, 0644);
-	if (rc != 0) {
-		fprintf(stderr, "%s\n", mdb_strerror(rc));
-		abort();
-	}
+	mdb_env_set_maxdbs(trlmdb_mdb_env(env), 10);
+	
+	rc = trlmdb_env_open(env, "./testdb", 0, 0644);
+	if (rc) print_error(rc);
 
-	MDB_txn *txn;
-	mdb_txn_begin(env, NULL, 0, &txn);
+	TRLMDB_txn *txn;
+	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+	if (rc) print_error(rc);
 
 	MDB_dbi dbi;
-        rc = mdb_dbi_open(txn, "table5", MDB_CREATE, &dbi);
-	if (rc != 0) {
-		fprintf(stderr, "%s\n", mdb_strerror(rc));
-		abort();
-	}
+	rc = trlmdb_dbi_open(txn, "users", MDB_CREATE, &dbi);
+	if (rc) print_error(rc);
 
-	mdb_txn_commit(txn);
-
-	mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
-	rc = mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi);
-	if (rc != 0) {
-		fprintf(stderr, "%s\n", mdb_strerror(rc));
-		abort();
-	}
-
-	MDB_cursor *cursor;
+	MDB_val key_1 = {6, "user-1"};
+	MDB_val val_1 = {6, "morten"};
 	
-	rc = mdb_cursor_open(txn, dbi, &cursor);
+	rc = trlmdb_put(txn, "users", dbi, &key_1, &val_1);
+	if (rc) print_error(rc);
 
-	MDB_val key, data;
-
-	while ((rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT)) == 0) {
-		printf("key: %p %.*s, data: %p %.*s\n",
-		       key.mv_data,  (int) key.mv_size,  (char *) key.mv_data,
-		       data.mv_data, (int) data.mv_size, (char *) data.mv_data);
-	}
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
 
 	
+        /* rc = mdb_dbi_open(txn, "table5", MDB_CREATE, &dbi); */
+	/* if (rc != 0) { */
+	/* 	fprintf(stderr, "%s\n", mdb_strerror(rc)); */
+	/* 	abort(); */
+	/* } */
 
-	mdb_cursor_close(cursor);
+	/* mdb_txn_commit(txn); */
+
+	/* mdb_txn_begin(env, NULL, MDB_RDONLY, &txn); */
+	/* rc = mdb_dbi_open(txn, NULL, MDB_CREATE, &dbi); */
+	/* if (rc != 0) { */
+	/* 	fprintf(stderr, "%s\n", mdb_strerror(rc)); */
+	/* 	abort(); */
+	/* } */
+
+	/* MDB_cursor *cursor; */
 	
-	mdb_txn_commit(txn);
+	/* rc = mdb_cursor_open(txn, dbi, &cursor); */
+
+	/* MDB_val key, data; */
+
+	/* while ((rc = mdb_cursor_get(cursor, &key, &data, MDB_NEXT)) == 0) { */
+	/* 	printf("key: %p %.*s, data: %p %.*s\n", */
+	/* 	       key.mv_data,  (int) key.mv_size,  (char *) key.mv_data, */
+	/* 	       data.mv_data, (int) data.mv_size, (char *) data.mv_data); */
+	/* } */
+
 	
 
-	mdb_env_close(env);
+	/* mdb_cursor_close(cursor); */
+	
+	
+	trlmdb_env_close(env);
 }

@@ -25,6 +25,4 @@ int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key);
 
 
 
-
-
 #endif

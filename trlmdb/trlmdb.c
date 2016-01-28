@@ -36,17 +36,17 @@ int trlmdb_env_create(TRLMDB_env **env)
 int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
 {
 	int rc = mdb_env_open(env->mdb_env, path, flags, mode);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	MDB_txn *txn;
 	rc = mdb_txn_begin(env->mdb_env, NULL, 0, &txn);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	rc = mdb_dbi_open(txn, _TRLMDB_TIME, MDB_CREATE, &env->trlmdb_time_dbi);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	rc = mdb_dbi_open(txn, _TRLMDB_RECENT, MDB_CREATE, &env->trlmdb_recent_dbi);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	return mdb_txn_commit(txn);
 }
@@ -69,25 +69,27 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 	if (!trlmdb_txn) return ENOMEM;
 
 	trlmdb_txn->env = env; 
-	
+
 	struct timeval tv;
 	int rc = gettimeofday(&tv, NULL);
-	if (!rc) return rc;
-
+	if (rc) return rc;
+	
 	u_int64_t usec = (u_int64_t) tv.tv_usec;
 	usec =  (usec << 32) / 1000000;
 	
        	trlmdb_txn->time = ((u_int64_t) (tv.tv_sec << 32)) | usec; 
 
 	*txn = trlmdb_txn;
-	
-	return mdb_txn_begin(env->mdb_env, parent->mdb_txn, flags, &(trlmdb_txn->mdb_txn));
+
+	return mdb_txn_begin(env->mdb_env, parent ? parent->mdb_txn : NULL, flags, &(trlmdb_txn->mdb_txn));
 }
 
 int  trlmdb_txn_commit(TRLMDB_txn *txn)
 {
-	int rc = mdb_txn_commit(txn->mdb_txn);
-	free(txn);
+	int rc = 0;
+
+	rc = mdb_txn_commit(txn->mdb_txn);
+	//free(txn);
 
 	return rc;
 }
@@ -106,7 +108,7 @@ MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
 int  trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, MDB_dbi *dbi)
 {
 	if (strcmp(name, _TRLMDB_TIME) == 0 || strcmp(name, _TRLMDB_RECENT) == 0) return EPERM;
-	if (flags | MDB_DUPSORT) return EPERM;
+	if (flags & MDB_DUPSORT) return EPERM;
 	
 	return mdb_dbi_open(txn->mdb_txn, name, flags, dbi);
 }
@@ -152,7 +154,7 @@ static int extended_time(u_int64_t time, u_int32_t random, int put, MDB_val *ext
 static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlmdb_recent_dbi, MDB_val *key, MDB_val *value)
 {
 	int rc = mdb_put(txn, trlmdb_time_dbi, key, value, 0);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	rc = mdb_put(txn, trlmdb_recent_dbi, key, value, 0);
 
@@ -166,25 +168,25 @@ static int trlmdb_put_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_va
 
 	MDB_val ext_key;
 	rc = extended_key(name, key, &ext_key);
-	if (!rc) return rc;
+	if (rc) return rc;
 
 	MDB_val ext_time;
 	rc = extended_time(txn->time, txn->env->random, data != NULL, &ext_time);
-	if (!rc) goto cleanup_ext_key;
+	if (rc) goto cleanup_ext_key;
 
 	MDB_txn *child_txn;
 	rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
-	if (!rc) goto cleanup_ext_time;
+	if (rc) goto cleanup_ext_time;
 
 	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, &ext_key, &ext_time);
-	if (!rc) goto cleanup_child_txn;
+	if (rc) goto cleanup_child_txn;
 
 	if (data) {
 		rc = mdb_put(child_txn, dbi, key, data, 0); 
-		if (!rc) goto cleanup_child_txn;
+		if (rc) goto cleanup_child_txn;
 	} else {
 		rc = mdb_del(child_txn, dbi, key, NULL);
-		if (!rc) goto cleanup_child_txn;
+		if (rc) goto cleanup_child_txn;
 	}
 
 	rc = mdb_txn_commit(child_txn);
