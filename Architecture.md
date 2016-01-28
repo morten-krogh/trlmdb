@@ -39,7 +39,7 @@ _trlmdb_recent contains recent changes. This database is used by the replicator 
 
 When user code updates a database, _trlmdb_time and _trlmdb_recent must be updated in the same transaction.
 
-The trlmdb libvrary does this automatically. If the user inserts values outside trlmdb, the environment might become inconsistent from the point of view of the replicator.
+The trlmdb library does this automatically. If the user inserts values outside trlmdb, the environment might become inconsistent from the point of view of the replicator.
 
 ## User code api
 
