@@ -33,27 +33,41 @@ int trlmdb_env_create(TRLMDB_env **env)
 
 	trlmdb_env->random = arc4random();
 	
+	int rc = mdb_env_create(&(trlmdb_env->mdb_env));
+	if (rc) free(trlmdb_env);
+
 	*env = trlmdb_env;
-	
-	return mdb_env_create(&(trlmdb_env->mdb_env));
+	return rc;
 }
 
 int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
 {
-	int rc = mdb_env_open(env->mdb_env, path, flags, mode);
+	int rc = 0;
+
+	rc = mdb_env_open(env->mdb_env, path, flags, mode);
 	if (rc) return rc;
 
 	MDB_txn *txn;
 	rc = mdb_txn_begin(env->mdb_env, NULL, 0, &txn);
-	if (rc) return rc;
+	if (rc) goto cleanup_env;
 
 	rc = mdb_dbi_open(txn, _TRLMDB_TIME, MDB_CREATE, &env->trlmdb_time_dbi);
-	if (rc) return rc;
+	if (rc) goto cleanup_txn;
 
 	rc = mdb_dbi_open(txn, _TRLMDB_RECENT, MDB_CREATE, &env->trlmdb_recent_dbi);
-	if (rc) return rc;
+	if (rc) goto cleanup_txn;
 
-	return mdb_txn_commit(txn);
+	rc = mdb_txn_commit(txn);
+	if (rc) goto cleanup_env;
+	
+	goto out;
+
+cleanup_txn:
+	mdb_txn_abort(txn);
+cleanup_env:
+	mdb_env_close(env->mdb_env);
+out:
+	return rc;
 }
 
 void trlmdb_env_close(TRLMDB_env *env)
@@ -77,7 +91,7 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 
 	struct timeval tv;
 	int rc = gettimeofday(&tv, NULL);
-	if (rc) return rc;
+	if (rc) goto cleanup_txn;
 	
 	u_int64_t usec = (u_int64_t) tv.tv_usec;
 	usec =  (usec << 32) / 1000000;
@@ -86,7 +100,15 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 
 	*txn = trlmdb_txn;
 
-	return mdb_txn_begin(env->mdb_env, parent ? parent->mdb_txn : NULL, flags, &(trlmdb_txn->mdb_txn));
+	rc = mdb_txn_begin(env->mdb_env, parent ? parent->mdb_txn : NULL, flags, &(trlmdb_txn->mdb_txn));
+	if (rc) goto cleanup_txn;
+
+	goto out;
+	
+cleanup_txn:
+	free(trlmdb_txn);
+out:
+	return rc;
 }
 
 int  trlmdb_txn_commit(TRLMDB_txn *txn)
@@ -94,7 +116,7 @@ int  trlmdb_txn_commit(TRLMDB_txn *txn)
 	int rc = 0;
 
 	rc = mdb_txn_commit(txn->mdb_txn);
-	//free(txn);
+	free(txn);
 
 	return rc;
 }
@@ -119,10 +141,21 @@ int  trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, TRLM
 	if (!trlmdb_dbi) return ENOMEM;
 	
 	trlmdb_dbi->name = strdup(name);
+	int rc = trlmdb_dbi->name ? 0 : ENOMEM;
+	if (rc) goto cleanup_dbi;
 
-	*dbi = trlmdb_dbi;
+	rc = mdb_dbi_open(txn->mdb_txn, name, flags, &trlmdb_dbi->mdb_dbi);	
+	if (rc) goto cleanup_name;
 	
-	return mdb_dbi_open(txn->mdb_txn, name, flags, &trlmdb_dbi->mdb_dbi);
+	*dbi = trlmdb_dbi;
+	goto out;
+
+cleanup_name:
+	free(trlmdb_dbi->name);
+cleanup_dbi:
+	free(trlmdb_dbi);
+out:
+	return rc;
 }
 
 MDB_dbi trlmdb_mdb_dbi(TRLMDB_dbi *dbi)
@@ -158,8 +191,8 @@ static int extended_time(u_int64_t time, u_int32_t random, int put, MDB_val *ext
 	if (!data) return ENOMEM;
 
 	*(u_int64_t*)data = time;
-	u_int32_t last = put ? (random | 1) : (random | ~(u_int32_t)1);
 
+	u_int32_t last = put ? (random | 1) : (random | ~(u_int32_t)1);
 	*(u_int32_t*)(data + 8) = last;
 
 	ext_time->mv_size = 12;

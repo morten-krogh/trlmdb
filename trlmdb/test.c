@@ -30,8 +30,8 @@ int main (void)
 	rc = trlmdb_dbi_open(txn, "users", MDB_CREATE, &dbi);
 	if (rc) print_error(rc);
 
-	MDB_val key_1 = {1, "a"};
-	MDB_val val_1 = {1, "a"};
+	MDB_val key_1 = {1, "c"};
+	MDB_val val_1 = {1, "c"};
 	
 	rc = trlmdb_put(txn, dbi, &key_1, &val_1);
 	if (rc) print_error(rc);
