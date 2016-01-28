@@ -10,13 +10,14 @@
 
 struct TRLMDB_env {
 	MDB_env *mdb_env;
-	MDB_dbi *trlmdb_time_dbi;
-	MDB_dbi *trlmdb_recent_dbi;
+	MDB_dbi trlmdb_time_dbi;
+	MDB_dbi trlmdb_recent_dbi;
 	u_int32_t random;
 };
 
 struct TRLMDB_txn {
 	MDB_txn *mdb_txn;
+	TRLMDB_env *env;
 	u_int64_t time;
 };
 
@@ -41,10 +42,10 @@ int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_m
 	rc = mdb_txn_begin(env->mdb_env, NULL, 0, &txn);
 	if (!rc) return rc;
 
-	rc = mdb_dbi_open(txn, _TRLMDB_TIME, MDB_CREATE, env->trlmdb_time_dbi);
+	rc = mdb_dbi_open(txn, _TRLMDB_TIME, MDB_CREATE, &env->trlmdb_time_dbi);
 	if (!rc) return rc;
 
-	rc = mdb_dbi_open(txn, _TRLMDB_RECENT, MDB_CREATE, env->trlmdb_recent_dbi);
+	rc = mdb_dbi_open(txn, _TRLMDB_RECENT, MDB_CREATE, &env->trlmdb_recent_dbi);
 	if (!rc) return rc;
 
 	return mdb_txn_commit(txn);
@@ -67,6 +68,8 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 	TRLMDB_txn *trlmdb_txn = calloc(1, sizeof *trlmdb_txn);
 	if (!trlmdb_txn) return ENOMEM;
 
+	trlmdb_txn->env = env; 
+	
 	struct timeval tv;
 	int rc = gettimeofday(&tv, NULL);
 	if (!rc) return rc;
@@ -75,6 +78,8 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 	usec =  (usec << 32) / 1000000;
 	
        	trlmdb_txn->time = ((u_int64_t) (tv.tv_sec << 32)) | usec; 
+
+	*txn = trlmdb_txn;
 	
 	return mdb_txn_begin(env->mdb_env, parent->mdb_txn, flags, &(trlmdb_txn->mdb_txn));
 }
@@ -107,7 +112,7 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_dbi dbi, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, dbi, key, data);
 }
 
-static void *extended_key(const char* name, MDB_val *key)
+static MDB_val void *extended_key(const char* name, MDB_val *key)
 {
 	size_t len_name = strlen(name);
 	size_t size = len_name + 1 + key->mv_size;
@@ -134,12 +139,41 @@ static void *extended_time(u_int64_t time, u_int32_t random, int put)
 	return ext_time;
 }
 
+static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlmdb_recent_dbi, MDB_val *key, MDB_val *value)
+{
+	int rc = mdb_put(txn, trlmdb_time_dbi, key, value, 0);
+	if (!rc) return rc;
+
+	rc = mdb_put(txn, trlmdb_recent_dbi, key, value, 0);
+
+	return rc;
+}
+
 int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
 {
 	void *ext_key = extended_key(name, key);
 	if (!ext_key) return ENOMEM;
 
+	void *ext_time = extended_time(txn->time, txn->env->random, 1);
+	if (!ext_time) return ENOMEM;
+
+	MDB_txn *child_txn;
+	int rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
+	if (!rc) return rc;
+
+	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, ext_key, ext_time);
+	if (!rc) {
+		mdb_txn_abort(child_txn);
+		return rc;
+	}
+
+	rc = mdb_put(child_txn, dbi, key, data, 0); 
+	if (!rc) {
+		mdb_txn_abort(child_txn);
+		return rc;
+	}
 	
+	return mdb_txn_commit(child_txn);	
 }
 
 int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key)
@@ -147,4 +181,8 @@ int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key)
 	void *ext_key = extended_key(name, key);
 	if (!ext_key) return ENOMEM;
 
+	void *ext_time = extended_time(txn->time, txn->env->random, 1);
+	if (!ext_time) return ENOMEM;
+
+	
 }
