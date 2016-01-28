@@ -4,53 +4,45 @@ The general principles applies to all key value stores. We will use lmdb termino
 There are a set of distributed nodes. Each node has keeps a replica of a lmdb environment. The environments have 
 named databases, and each database has a set of key-value pairs. The goal is to have the nodes agree on the content of the environments. The agreement is eventual, so it is possible that clients see different values for a key. However, the nodes should update each other quite fast.
 
-### Time stamp
-
-The principle of trlmdb is that each value is augmented with a time stamp. The time stamps consists of three uint32:
-
-1. seconds after the 1. january 1970.
-2. fractional seconds after the first part.
-3. A random uint32 that is fixed each time an environment is opened.
-
-The reason for the random part is to avoid ties in the unlikely event that two nodes update the same key at the exact same time point. The random part is, for performance reasons, constant within a given opening of an environment of a node becasuse updates of a node happens sequentially and have a natural ordering; in the unlikely event that two updates of a key came at the same fraction of a second in the same environment instance, the latter one would overwrite the first one in any case.  
-
-A time stamp has the following byte format
-
-time-stamp = seconds fration-seconds random
-
-A time stamp is 12 bytes long.
-
 ### Extended key
 
 Values in the environment are index by the named database and the key in that database. The combination is an extended key. Extended keys are byte encoded as
 
 extended-key = database-name-including-null-byte key 
 
+Two extended keys are qequal if and only if the databases are equal and the keys are equal. This follows from the fact that database names do not contain the null byte.
 
 
-### Extended values
+### Extended time stamp
 
-Values inserted into an environment for a given database and key are extended with the time stamp and a presence byte that describes whether the value is present or absent. The presence byte is needed to keep track of deletions; information about a deleted key is needed to update the replicating nodes.
+The principle of trlmdb is that each change of a value is tagged with an extended time stamp. 
+An extened time stamp contans the time of the update, a random value separate ties, and information about whether a value is present or deleted.
 
-The exact byte format of the inserted value is
+An extended time stamps consists of three uint32:
 
-extended-value = time-stamp presence-byte value
+1. seconds after the 1. january 1970.
+2. fractional seconds after the first part.
+3. A random uint32 where the least significant byte is 0 for deletion and 1 for insertion/update. The random value can be reused by an open environment to increase performance. The important point is that the random uint32 can distinguish nodes from each other. The last bit must of course be adjusted for each operation. 
 
-The extended value is hence 13 bytes larger than the value.
+An extended time stamp is 12 bytes long. The time stamp has a sub nano-second precision and is applicable till around year 2100.  
 
-### _trlmdb
 
-A special reserved database of name _trlmdb is kept in the environment by trlmdb. 
-This database is used to tell the replicator that there are changes in the envrionment. 
-The replicator will read the _trlmdb database, store the information in its own environment and delete the entries afterwards. The special databsase, _trlmdb, enhances performance; the information in _trlmdb could be found by the replicator by traversing all databases.
-The keys in _trlmdb are extended keys, and the values are time stamps.
+### _trlmdb_time, _trlmdb_recent
 
-When user code updates a database, _trlmdb must be updated int he same transaction.
+Two database names are reserved: _trlmdb_time and _trlmdb_recent
 
-The trlmdb libvrary does this automatically.
+They are used by the replicator. Both have extended keys as keys and extended time stamps as values.
 
+_trlmdb_time contains all extended keys that ever existed in the environment.
+
+_trlmdb_recent contains recent changes. This database is used by the replicator to locate changes since it last visited the environment. The replicator could in principle traverse _trlmdb_time to collect all information, but it would slow to do that often.
+
+When user code updates a database, _trlmdb_time and _trlmdb_recent must be updated in the same transaction.
+
+The trlmdb libvrary does this automatically. If the user inserts values outside trlmdb, the environment might become inconsistent from the point of view of the replicator.
 
 ## User code api
+
 
 
 
