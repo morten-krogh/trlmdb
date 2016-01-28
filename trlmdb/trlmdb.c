@@ -21,6 +21,11 @@ struct TRLMDB_txn {
 	u_int64_t time;
 };
 
+struct TRLMDB_dbi {
+	MDB_dbi mdb_dbi;
+	char *name;
+};
+
 int trlmdb_env_create(TRLMDB_env **env)
 {
 	TRLMDB_env *trlmdb_env = calloc(1, sizeof *trlmdb_env);
@@ -105,17 +110,29 @@ MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
 	return txn->mdb_txn;
 }
 
-int  trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, MDB_dbi *dbi)
+int  trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, TRLMDB_dbi **dbi)
 {
 	if (strcmp(name, _TRLMDB_TIME) == 0 || strcmp(name, _TRLMDB_RECENT) == 0) return EPERM;
 	if (flags & MDB_DUPSORT) return EPERM;
+
+	TRLMDB_dbi *trlmdb_dbi = calloc(1, sizeof *trlmdb_dbi); 
+	if (!trlmdb_dbi) return ENOMEM;
 	
-	return mdb_dbi_open(txn->mdb_txn, name, flags, dbi);
+	trlmdb_dbi->name = strdup(name);
+
+	*dbi = trlmdb_dbi;
+	
+	return mdb_dbi_open(txn->mdb_txn, name, flags, &trlmdb_dbi->mdb_dbi);
 }
 
-int trlmdb_get(TRLMDB_txn *txn, MDB_dbi dbi, MDB_val *key, MDB_val *data)
+MDB_dbi trlmdb_mdb_dbi(TRLMDB_dbi *dbi)
 {
-	return mdb_get(txn->mdb_txn, dbi, key, data);
+	return dbi->mdb_dbi;
+}
+
+int trlmdb_get(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key, MDB_val *data)
+{
+	return mdb_get(txn->mdb_txn, dbi->mdb_dbi, key, data);
 }
 
 static int extended_key(const char* name, const MDB_val *key, MDB_val *ext_key)
@@ -202,12 +219,12 @@ cleanup_ext_key:
 	return rc;
 }	
 
-int trlmdb_put(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key, MDB_val *data)
+int trlmdb_put(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key, MDB_val *data)
 {
-	return trlmdb_put_del(txn, name, dbi, key, data);
+	return trlmdb_put_del(txn, dbi->name, dbi->mdb_dbi, key, data);
 }
 
-int trlmdb_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_val *key)
+int trlmdb_del(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key)
 {
-	return trlmdb_put_del(txn, name, dbi, key, NULL);
+	return trlmdb_put_del(txn, dbi->name, dbi->mdb_dbi, key, NULL);
 }

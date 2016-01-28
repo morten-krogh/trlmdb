@@ -26,14 +26,14 @@ int main (void)
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_error(rc);
 
-	MDB_dbi dbi;
+	TRLMDB_dbi *dbi;
 	rc = trlmdb_dbi_open(txn, "users", MDB_CREATE, &dbi);
 	if (rc) print_error(rc);
 
-	MDB_val key_1 = {6, "user-1"};
-	MDB_val val_1 = {6, "morten"};
+	MDB_val key_1 = {1, "a"};
+	MDB_val val_1 = {1, "a"};
 	
-	rc = trlmdb_put(txn, "users", dbi, &key_1, &val_1);
+	rc = trlmdb_put(txn, dbi, &key_1, &val_1);
 	if (rc) print_error(rc);
 
 	rc = trlmdb_txn_commit(txn);
