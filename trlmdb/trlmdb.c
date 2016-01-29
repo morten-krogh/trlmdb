@@ -6,12 +6,14 @@
 #include "trlmdb.h"
 
 #define _TRLMDB_TIME "_trlmdb_time"
-#define _TRLMDB_RECENT "_trlmdb_recent"
+#define _TRLMDB_HISTORY "_trlmdb_history"
+#define _TRLMDB_NODES "_trlmdb_nodes"
 
 struct TRLMDB_env {
 	MDB_env *mdb_env;
 	MDB_dbi trlmdb_time_dbi;
-	MDB_dbi trlmdb_recent_dbi;
+	MDB_dbi trlmdb_history_dbi;
+	MDB_dbi trlmdb_nodes_dbi;
 	u_int32_t random;
 };
 
@@ -54,9 +56,12 @@ int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_m
 	rc = mdb_dbi_open(txn, _TRLMDB_TIME, MDB_CREATE, &env->trlmdb_time_dbi);
 	if (rc) goto cleanup_txn;
 
-	rc = mdb_dbi_open(txn, _TRLMDB_RECENT, MDB_CREATE, &env->trlmdb_recent_dbi);
+	rc = mdb_dbi_open(txn, _TRLMDB_HISTORY, MDB_INTEGERKEY | MDB_CREATE, &env->trlmdb_history_dbi);
 	if (rc) goto cleanup_txn;
 
+	rc = mdb_dbi_open(txn, _TRLMDB_NODES, MDB_CREATE, &env->trlmdb_nodes_dbi);
+	if (rc) goto cleanup_txn;
+	
 	rc = mdb_txn_commit(txn);
 	if (rc) goto cleanup_env;
 	
@@ -134,7 +139,7 @@ MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
 
 int  trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, TRLMDB_dbi **dbi)
 {
-	if (strcmp(name, _TRLMDB_TIME) == 0 || strcmp(name, _TRLMDB_RECENT) == 0) return EPERM;
+	if (strcmp(name, _TRLMDB_TIME) == 0 || strcmp(name, _TRLMDB_HISTORY) == 0 || strcmp(name, _TRLMDB_NODES) == 0) return EPERM;
 	if (flags & MDB_DUPSORT) return EPERM;
 
 	TRLMDB_dbi *trlmdb_dbi = calloc(1, sizeof *trlmdb_dbi); 
@@ -184,31 +189,44 @@ static int extended_key(const char* name, const MDB_val *key, MDB_val *ext_key)
 	return 0;
 }
 
-/* put = 1 for put and put = 0 for del */
-static int extended_time(u_int64_t time, u_int32_t random, int put, MDB_val *ext_time)
+/* put = 1 for put and put = 0 for del. ext_time must have size 12 or more. */
+static void extended_time(u_int64_t time, u_int32_t random, int put, void *ext_time)
 {
-	void *data = malloc(12);
-	if (!data) return ENOMEM;
-
-	*(u_int64_t*)data = time;
+	*(u_int64_t*)ext_time = time;
 
 	u_int32_t last = put ? (random | 1) : (random | ~(u_int32_t)1);
-	*(u_int32_t*)(data + 8) = last;
+	*(u_int32_t*)(ext_time + 8) = last;
 
-	ext_time->mv_size = 12;
-	ext_time->mv_data = data;
-	
-	return 0;
+	return;
 }
 
-static int put_trlmdb_tables(MDB_txn *txn, MDB_dbi trlmdb_time_dbi, MDB_dbi trlmdb_recent_dbi, MDB_val *key, MDB_val *value)
+static int put_trlmdb_time(MDB_txn *txn, u_int64_t time, u_int32_t random, int put, MDB_dbi trlmdb_time_dbi, MDB_val *ext_key)
 {
-	int rc = mdb_put(txn, trlmdb_time_dbi, key, value, 0);
-	if (rc) return rc;
+	char ext_time[12];
+	extended_time(time, random, put, ext_time);
+	MDB_val val = {12, ext_time};
+	return mdb_put(txn, trlmdb_time_dbi, ext_key, &val, 0);
+}
 
-	rc = mdb_put(txn, trlmdb_recent_dbi, key, value, 0);
+static int put_trlmdb_history(MDB_txn *txn, MDB_dbi trlmdb_history_dbi, MDB_val *ext_key)
+{
+	MDB_cursor *cursor;
+	mdb_cursor_open(txn, trlmdb_history_dbi, &cursor);
 
-	return rc;
+	MDB_val key;
+	MDB_val data;
+	int rc = mdb_cursor_get(cursor, &key, &data, MDB_LAST);
+
+	size_t index = 0;
+	if (!rc) {
+		index = (size_t) key.mv_data;
+		index++;
+	}
+
+	key.mv_size = sizeof(size_t);
+	key.mv_data = &index;
+	
+	return mdb_put(txn, trlmdb_history_dbi, &key, ext_key, 0);
 }
 
 /* if data == NULL it is a delete operation otherwise a put operation */
@@ -220,15 +238,14 @@ static int trlmdb_put_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_va
 	rc = extended_key(name, key, &ext_key);
 	if (rc) return rc;
 
-	MDB_val ext_time;
-	rc = extended_time(txn->time, txn->env->random, data != NULL, &ext_time);
-	if (rc) goto cleanup_ext_key;
-
 	MDB_txn *child_txn;
 	rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
-	if (rc) goto cleanup_ext_time;
+	if (rc) goto cleanup_ext_key;
 
-	rc = put_trlmdb_tables(child_txn, txn->env->trlmdb_time_dbi, txn->env->trlmdb_recent_dbi, &ext_key, &ext_time);
+	rc = put_trlmdb_time(child_txn, txn->time, txn->env->random, data != NULL, txn->env->trlmdb_time_dbi, &ext_key);
+	if (rc) goto cleanup_child_txn;
+
+	rc = put_trlmdb_history(child_txn, txn->env->trlmdb_history_dbi, &ext_key);
 	if (rc) goto cleanup_child_txn;
 
 	if (data) {
@@ -240,12 +257,10 @@ static int trlmdb_put_del(TRLMDB_txn *txn, const char *name, MDB_dbi dbi, MDB_va
 	}
 
 	rc = mdb_txn_commit(child_txn);
-	goto cleanup_ext_time;
+	goto cleanup_ext_key;
 	
 cleanup_child_txn:
 	mdb_txn_abort(child_txn);
-cleanup_ext_time:
-	free(ext_time.mv_data);
 cleanup_ext_key:
 	free(ext_key.mv_data);
 	
