@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -194,7 +195,7 @@ static void extended_time(u_int64_t time, u_int32_t random, int put, void *ext_t
 {
 	*(u_int64_t*)ext_time = time;
 
-	u_int32_t last = put ? (random | 1) : (random | ~(u_int32_t)1);
+	u_int32_t last = put ? (random | 1) : (random & ~(u_int32_t)1);
 	*(u_int32_t*)(ext_time + 8) = last;
 
 	return;
@@ -219,10 +220,10 @@ static int put_trlmdb_history(MDB_txn *txn, MDB_dbi trlmdb_history_dbi, MDB_val 
 
 	size_t index = 0;
 	if (!rc) {
-		index = (size_t) key.mv_data;
+		index = *(size_t*) key.mv_data;
 		index++;
 	}
-
+	
 	key.mv_size = sizeof(size_t);
 	key.mv_data = &index;
 	

@@ -27,11 +27,11 @@ int main (void)
 	if (rc) print_error(rc);
 
 	TRLMDB_dbi *dbi;
-	rc = trlmdb_dbi_open(txn, "users", MDB_CREATE, &dbi);
+	rc = trlmdb_dbi_open(txn, "a", MDB_CREATE, &dbi);
 	if (rc) print_error(rc);
 
 	MDB_val key_1 = {1, "c"};
-	MDB_val val_1 = {1, "c"};
+	MDB_val val_1 = {2, "cc"};
 	
 	rc = trlmdb_put(txn, dbi, &key_1, &val_1);
 	if (rc) print_error(rc);
@@ -39,6 +39,18 @@ int main (void)
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
 
+	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+	if (rc) print_error(rc);
+
+	MDB_val key_2 = {1, "c"};
+	
+	rc = trlmdb_del(txn, dbi, &key_2);
+	if (rc) print_error(rc);
+
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+
+	
 	
         /* rc = mdb_dbi_open(txn, "table5", MDB_CREATE, &dbi); */
 	/* if (rc != 0) { */
