@@ -9,6 +9,11 @@ void print_error(int rc)
 	exit(rc);
 }
 
+void print_mdb_val(MDB_val *val)
+{
+	printf("size = %zu, data = %.*s\n", val->mv_size, (int) val->mv_size, val->mv_data);
+}
+
 int main (void)
 {
 	int rc = 0;
@@ -17,8 +22,6 @@ int main (void)
 	rc = trlmdb_env_create(&env);
 	if (rc) print_error(rc); 
 	
-	mdb_env_set_maxdbs(trlmdb_mdb_env(env), 10);
-	
 	rc = trlmdb_env_open(env, "./testdb", 0, 0644);
 	if (rc) print_error(rc);
 
@@ -26,30 +29,44 @@ int main (void)
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_error(rc);
 
-	TRLMDB_dbi *dbi;
-	rc = trlmdb_dbi_open(txn, "a", MDB_CREATE, &dbi);
-	if (rc) print_error(rc);
-
-	MDB_val key_1 = {1, "c"};
-	MDB_val val_1 = {2, "cc"};
+	MDB_val key_1 = {1, "a"};
+	MDB_val val_1 = {2, "aa"};
 	
-	rc = trlmdb_put(txn, dbi, &key_1, &val_1);
+	rc = trlmdb_put(txn, &key_1, &val_1);
 	if (rc) print_error(rc);
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
 
+	MDB_val key_2 = {1, "a"};
+	MDB_val val_2;
+	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+	rc = trlmdb_get(txn, &key_2, &val_2);
+	if (rc) print_error(rc);
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+	print_mdb_val(&val_2);
+	
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_error(rc);
 
-	MDB_val key_2 = {1, "c"};
+	MDB_val key_3 = {1, "c"};
 	
-	rc = trlmdb_del(txn, dbi, &key_2);
+	rc = trlmdb_del(txn, &key_3);
 	if (rc) print_error(rc);
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
 
+	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+	rc = trlmdb_get(txn, &key_2, &val_2);
+	if (rc) print_error(rc);
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+	print_mdb_val(&val_2);
+	
+
+	
 	
 	
         /* rc = mdb_dbi_open(txn, "table5", MDB_CREATE, &dbi); */

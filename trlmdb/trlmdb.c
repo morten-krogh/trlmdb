@@ -36,7 +36,7 @@ static void insert_uint32(uint8_t *dst, const uint32_t src)
 
 static void insert_uint64(uint8_t *dst, const uint64_t src)
 {
-	uint32_t upper = (uint32_t) (src >> 32) & 0xFFFFFFFF;
+	uint32_t upper = (uint32_t) (src >> 32);
 	insert_uint32(dst + 4, upper);
 	uint32_t lower = (uint32_t) src & 0xFFFFFFFF;
 	insert_uint32(dst + 4, lower);
@@ -63,6 +63,8 @@ int trlmdb_env_create(TRLMDB_env **env)
 	int rc = mdb_env_create(&(db_env->mdb_env));
 	if (rc) free(db_env);
 
+	mdb_env_set_maxdbs(db_env->mdb_env, 4);
+	
 	*env = db_env;
 	return rc;
 }
