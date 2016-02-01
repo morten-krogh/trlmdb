@@ -73,7 +73,8 @@ static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
 	uint8_t *node_time = malloc(node_time_size);
 	if (!node_time) return ENOMEM;
 	
-	MDB_val node_val, data, node_time_data;
+	MDB_val node_val, data;
+	MDB_val node_time_data = {0, ""};
 	while ((rc = mdb_cursor_get(cursor, &node_val, &data, MDB_NEXT)) == 0) {
 		if (node_val.mv_size > node_time_size - TIME_LENGTH) {
 			node_time_size = node_val.mv_size + TIME_LENGTH;
@@ -82,7 +83,7 @@ static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
 		}
 		memcpy(node_time, node_val.mv_data, node_val.mv_size);
 		memcpy(node_time + node_val.mv_size, time, TIME_LENGTH);
-		MDB_val node_time_key = {node_val.mv_size + TIME_LENGTH};
+		MDB_val node_time_key = {node_val.mv_size + TIME_LENGTH, node_time};
 		rc = mdb_put(txn->mdb_txn, txn->env->dbi_node_time, &node_time_key, &node_time_data, 0);
 		if (rc) break;
 	}
@@ -413,7 +414,7 @@ int trlmdb_node_del(TRLMDB_txn *txn, char *node_name)
 	rc = mdb_cursor_get(cursor, &node_time_val, &data, MDB_SET_RANGE);
 	while (!rc && node_time_val.mv_size >= node_name_len && memcmp(node_time_val.mv_data, node_name, node_name_len) == 0) {
 		rc = mdb_cursor_del(cursor, 0);
-		if (!rc) break;
+		if (rc) break;
 		rc = mdb_cursor_get(cursor, &node_time_val, &data, MDB_NEXT);
 	}
 

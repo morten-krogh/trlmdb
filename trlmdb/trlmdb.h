@@ -30,10 +30,9 @@ void trlmdb_cursor_close(TRLMDB_cursor *cursor);
 int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op);
 
 int trlmdb_node_add(TRLMDB_txn *txn, char *node_name);
+int trlmdb_node_del(TRLMDB_txn *txn, char *node_name);
+int trlmdb_node_remove_time(TRLMDB_txn *txn, char *node_name, uint8_t *time);	
 
 void print_mdb_val(MDB_val *val);
-int trlmdb_node_remove_time(TRLMDB_txn *txn, char *node_name, uint8_t *time);
-int trlmdb_node_del(TRLMDB_txn *txn, char *node_name);
-	
 
 #endif

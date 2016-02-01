@@ -21,6 +21,22 @@ int main (void)
 	if (rc) print_error(rc);
 
 	TRLMDB_txn *txn;
+	
+	/* add nodes */
+	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+	if (rc) print_error(rc);
+
+	rc = trlmdb_node_add(txn, "node-1");
+	if (rc) print_error(rc);
+
+	rc = trlmdb_node_add(txn, "mm");
+	if (rc) print_error(rc);
+	
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+	
+	/* add keys/values */
+	
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_error(rc);
 
@@ -47,7 +63,7 @@ int main (void)
 
 	MDB_val key_3 = {1, "c"};
 	rc = trlmdb_del(txn, &key_3);
-	//if (rc) print_error(rc);
+	if (rc && rc != MDB_NOTFOUND) print_error(rc);
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
@@ -64,7 +80,7 @@ int main (void)
 	/* nested transaction */
 
 	rc = trlmdb_env_create(&env);
-	if (rc) print_error(rc); 
+	if (rc) print_error(rc);
 	
 	rc = trlmdb_env_open(env, "./testdb", 0, 0644);
 	if (rc) print_error(rc);
@@ -118,19 +134,6 @@ int main (void)
 
 	trlmdb_cursor_close(cursor);
 
-	rc = trlmdb_txn_commit(txn);
-	if (rc) print_error(rc);
-
-	/* add nodes */
-	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
-	if (rc) print_error(rc);
-
-	rc = trlmdb_node_add(txn, "node-1");
-	if (rc) print_error(rc);
-
-	rc = trlmdb_node_add(txn, "mm");
-	if (rc) print_error(rc);
-	
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
 
