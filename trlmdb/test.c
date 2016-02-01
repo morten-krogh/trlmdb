@@ -9,11 +9,6 @@ void print_error(int rc)
 	exit(rc);
 }
 
-void print_mdb_val(MDB_val *val)
-{
-	printf("size = %zu, data = %.*s\n", val->mv_size, (int) val->mv_size, val->mv_data);
-}
-
 int main (void)
 {
 	int rc = 0;
@@ -126,7 +121,7 @@ int main (void)
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
 
-	/* add node */
+	/* add nodes */
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_error(rc);
 
@@ -134,6 +129,18 @@ int main (void)
 	if (rc) print_error(rc);
 
 	rc = trlmdb_node_add(txn, "mm");
+	if (rc) print_error(rc);
+	
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+
+	/* delete node */
+	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+	if (rc) print_error(rc);
+
+	rc = trlmdb_node_del(txn, "mm");
+	if (rc) print_error(rc);
+
 	if (rc) print_error(rc);
 	
 	rc = trlmdb_txn_commit(txn);
