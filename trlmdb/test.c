@@ -108,7 +108,6 @@ int main (void)
 	
 	/* cursor */
 	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
-	rc = trlmdb_get(txn, &key_2, &val_2);
 	if (rc) print_error(rc);
 
 	TRLMDB_cursor *cursor;
@@ -126,4 +125,16 @@ int main (void)
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
+
+	/* add node */
+	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+	if (rc) print_error(rc);
+
+	rc = trlmdb_node_add(txn, "node-1");
+	if (rc) print_error(rc);
+	
+	rc = trlmdb_txn_commit(txn);
+	if (rc) print_error(rc);
+
+	trlmdb_env_close(env);
 }

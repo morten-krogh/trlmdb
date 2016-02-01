@@ -29,5 +29,7 @@ int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor);
 void trlmdb_cursor_close(TRLMDB_cursor *cursor);
 int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op);
 
+int trlmdb_node_add(TRLMDB_txn *txn, char *node_name);
+	
 
 #endif

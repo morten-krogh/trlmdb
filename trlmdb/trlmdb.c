@@ -10,6 +10,7 @@
 #define DB_TIME_TO_DATA "db_time_to_data"
 #define DB_KEY_TO_TIME "db_key_to_time"
 #define DB_NODES "db_nodes"
+#define DB_NODE_TIME "db_node_time"
 
 struct TRLMDB_env {
 	MDB_env *mdb_env;
@@ -17,6 +18,7 @@ struct TRLMDB_env {
 	MDB_dbi dbi_time_to_data;
 	MDB_dbi dbi_key_to_time;
 	MDB_dbi dbi_nodes;
+	MDB_dbi dbi_node_time;
 	uint8_t time_component[4];
 };
 
@@ -69,7 +71,7 @@ int trlmdb_env_create(TRLMDB_env **env)
 	int rc = mdb_env_create(&(db_env->mdb_env));
 	if (rc) free(db_env);
 
-	mdb_env_set_maxdbs(db_env->mdb_env, 4);
+	mdb_env_set_maxdbs(db_env->mdb_env, 5);
 	
 	*env = db_env;
 	return rc;
@@ -97,6 +99,9 @@ int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_m
 
 	rc = mdb_dbi_open(txn, DB_NODES, MDB_CREATE, &env->dbi_nodes);
 	if (rc) goto cleanup_txn;
+
+	rc = mdb_dbi_open(txn, DB_NODE_TIME, MDB_CREATE, &env->dbi_node_time);
+	if (rc) goto cleanup_txn;
 	
 	rc = mdb_txn_commit(txn);
 	if (rc) goto cleanup_env;
@@ -116,7 +121,6 @@ void trlmdb_env_close(TRLMDB_env *env)
 	mdb_env_close(env->mdb_env);
 	free(env);
 }
-
 
 MDB_env *trlmdb_mdb_env(TRLMDB_env *env)
 {
@@ -280,7 +284,7 @@ void trlmdb_cursor_close(TRLMDB_cursor *cursor){
 	free(cursor);
 }
 
-int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op)
+int trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op)
 {
 	MDB_val time_val;
 	
@@ -296,4 +300,11 @@ int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *
 		data->mv_data = NULL;
 		return 0;
 	}
+}
+
+int trlmdb_node_add(TRLMDB_txn *txn, char *node_name)
+{
+	MDB_val key = {strlen(node_name), node_name};
+	MDB_val data = {0, ""};
+	return mdb_put(txn->mdb_txn, txn->env->dbi_nodes, &key, &data, 0);
 }
