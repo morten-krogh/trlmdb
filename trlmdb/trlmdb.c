@@ -26,6 +26,12 @@ struct TRLMDB_txn {
 	unsigned int flags;
 	uint8_t time[12];
 	uint64_t counter;
+	TRLMDB_txn *parent;
+};
+
+struct TRLMDB_cursor {
+	TRLMDB_txn *txn;
+	MDB_cursor *mdb_cursor;
 };
 
 static void insert_uint32(uint8_t *dst, const uint32_t src)
@@ -124,24 +130,23 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 
 	db_txn->env = env;
 	db_txn->flags = flags;
-
+	db_txn->parent = parent;
+	
 	if (parent) {
 		memmove(db_txn->time, parent->time, 8);
+		db_txn->counter = parent->counter;
 	} else {
 		struct timeval tv;
 		int rc = gettimeofday(&tv, NULL);
 		if (rc) goto cleanup_txn;
-
 		insert_uint32(db_txn->time, (uint32_t) tv.tv_sec);
-		
 		uint64_t usec = (uint64_t) tv.tv_usec;
 		uint64_t frac_sec = (usec << 32) / 1000000;
 		insert_uint32(db_txn->time + 4, (uint32_t) frac_sec);
+		db_txn->counter = 0;		
 	}
 
 	memmove(db_txn->time + 8, env->time_component, 4);
-	
-	db_txn->counter = 0;
 	
 	int rc = mdb_txn_begin(env->mdb_env, parent ? parent->mdb_txn : NULL, flags, &(db_txn->mdb_txn));
 	if (rc) goto cleanup_txn;
@@ -160,6 +165,9 @@ int  trlmdb_txn_commit(TRLMDB_txn *txn)
 {
 	int rc = 0;
 
+	if (txn->parent) {
+		txn->parent->counter = txn->counter;
+	}
 	rc = mdb_txn_commit(txn->mdb_txn);
 	free(txn);
 
@@ -168,6 +176,9 @@ int  trlmdb_txn_commit(TRLMDB_txn *txn)
 
 void trlmdb_txn_abort(TRLMDB_txn *txn)
 {
+	if (txn->parent) {
+		txn->parent->counter = txn->counter;
+	}
 	mdb_txn_abort(txn->mdb_txn);
 	free(txn);
 }
@@ -177,7 +188,7 @@ MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
 	return txn->mdb_txn;
 }
 
-int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
+int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -185,7 +196,7 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 
 	if (!is_put_op(time_val.mv_data)) return MDB_NOTFOUND;
 
-	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_value, &time_val, data);
+	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_value, &time_val, value);
 }
 
 int trlmdb_insert_time_key_val(TRLMDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *value)
@@ -246,4 +257,37 @@ int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 int trlmdb_del(TRLMDB_txn *txn, MDB_val *key)
 {
 	return trlmdb_put_del(txn, key, NULL);
+}
+
+int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor)
+{
+	TRLMDB_cursor *db_cursor = calloc(1, sizeof *db_cursor);
+	if (!db_cursor) return ENOMEM; 
+
+	*cursor = db_cursor;
+	db_cursor->txn = txn;
+	return mdb_cursor_open(txn->mdb_txn, txn->env->dbi_key_to_time, &db_cursor->mdb_cursor);
+}
+
+void trlmdb_cursor_close(TRLMDB_cursor *cursor){
+	mdb_cursor_close(cursor->mdb_cursor);
+	free(cursor);
+}
+
+int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op)
+{
+	MDB_val time_val;
+	
+	int rc = mdb_cursor_get(cursor->mdb_cursor, key, &time_val, op);
+	if (rc) return rc;
+
+	if (is_put_op(time_val.mv_data)) {
+		*is_deleted = 0;
+		return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_value, &time_val, data);
+	} else {
+		*is_deleted = 1;
+		data->mv_size = 0;
+		data->mv_data = NULL;
+		return 0;
+	}
 }

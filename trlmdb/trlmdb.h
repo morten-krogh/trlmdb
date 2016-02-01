@@ -6,6 +6,7 @@
 typedef struct TRLMDB_env TRLMDB_env;
 typedef struct TRLMDB_txn TRLMDB_txn;
 typedef struct TRLMDB_dbi TRLMDB_dbi;
+typedef struct TRLMDB_cursor TRLMDB_cursor;
 
 int trlmdb_env_create(TRLMDB_env **env);
 int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode);
@@ -24,6 +25,9 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data);
 int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *value);
 int trlmdb_del(TRLMDB_txn *txn, MDB_val *key);
 
+int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor);
+void trlmdb_cursor_close(TRLMDB_cursor *cursor);
+int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op);
 
 
 #endif
