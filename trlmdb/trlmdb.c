@@ -6,22 +6,25 @@
 
 #include "trlmdb.h"
 
-#define _TRLMDB_TIME "_trlmdb_time"
-#define _TRLMDB_HISTORY "_trlmdb_history"
-#define _TRLMDB_NODES "_trlmdb_nodes"
+#define DB_TIME_TO_KEY "db_time_to_key"
+#define DB_TIME_TO_VALUE "db_time_to_value"
+#define DB_KEY_TO_TIME "db_key_to_time"
+#define DB_NODES "db_nodes"
 
 struct TRLMDB_env {
 	MDB_env *mdb_env;
-	MDB_dbi trlmdb_time_dbi;
-	MDB_dbi trlmdb_history_dbi;
-	MDB_dbi trlmdb_nodes_dbi;
-	u_int32_t random;
+	MDB_dbi dbi_time_to_key;
+	MDB_dbi dbi_time_to_value;
+	MDB_dbi dbi_key_to_time;
+	MDB_dbi dbi_nodes;
+	u_int32_t time_component;
 };
 
 struct TRLMDB_txn {
 	MDB_txn *mdb_txn;
 	TRLMDB_env *env;
-	u_int64_t time;
+	unsigned int flags;
+	char time[8];
 };
 
 struct TRLMDB_dbi {
