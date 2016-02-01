@@ -132,6 +132,9 @@ int main (void)
 
 	rc = trlmdb_node_add(txn, "node-1");
 	if (rc) print_error(rc);
+
+	rc = trlmdb_node_add(txn, "mm");
+	if (rc) print_error(rc);
 	
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);
