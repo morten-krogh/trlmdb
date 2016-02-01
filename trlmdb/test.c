@@ -51,10 +51,8 @@ int main (void)
 	if (rc) print_error(rc);
 
 	MDB_val key_3 = {1, "c"};
-
-
 	rc = trlmdb_del(txn, &key_3);
-	if (rc) print_error(rc);
+	//if (rc) print_error(rc);
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc) print_error(rc);

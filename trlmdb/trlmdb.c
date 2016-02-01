@@ -256,6 +256,12 @@ int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 
 int trlmdb_del(TRLMDB_txn *txn, MDB_val *key)
 {
+	MDB_val time_val;
+	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
+	if (rc) return rc;
+
+	if (!is_put_op(time_val.mv_data)) return MDB_NOTFOUND;
+
 	return trlmdb_put_del(txn, key, NULL);
 }
 
