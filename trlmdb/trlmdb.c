@@ -12,6 +12,8 @@
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
 
+#define TIME_LENGTH 20
+
 struct TRLMDB_env {
 	MDB_env *mdb_env;
 	MDB_dbi dbi_time_to_key;
@@ -59,6 +61,36 @@ static int is_put_op(uint8_t *time)
 static int cmp_time(uint8_t *time1, uint8_t *time2)
 {
 	return memcmp(time1, time2, 20);
+}
+
+static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
+{
+	MDB_cursor *cursor;
+	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_nodes, &cursor);
+	if (rc) return rc;
+
+	size_t node_time_size = 100;
+	uint8_t *node_time = malloc(node_time_size);
+	if (!node_time) return ENOMEM;
+	
+	MDB_val node_val, data, node_time_data;
+	while ((rc = mdb_cursor_get(cursor, &node_val, &data, MDB_NEXT)) == 0) {
+		if (node_val.mv_size > node_time_size - TIME_LENGTH) {
+			node_time_size = node_val.mv_size + TIME_LENGTH;
+			node_time = realloc(node_time, node_time_size);
+			if (!node_time) goto cleanup_node_time;
+		}
+		memcpy(node_time, node_val.mv_data, node_val.mv_size);
+		memcpy(node_time + node_val.mv_size, time, TIME_LENGTH);
+		MDB_val node_time_key = {node_val.mv_size + TIME_LENGTH};
+		rc = mdb_put(txn->mdb_txn, txn->env->dbi_node_time, &node_time_key, &node_time_data, 0);
+		if (rc) break;
+	}
+
+cleanup_node_time:
+	free(node_time);
+
+	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
 void print_mdb_val(MDB_val *val)
@@ -219,35 +251,38 @@ int trlmdb_insert_time_key_data(TRLMDB_txn *txn, uint8_t *time, MDB_val *key, MD
 
 	MDB_val time_val = {20, time};
 	
-	MDB_txn *child_txn;
-	rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
+	TRLMDB_txn *child_txn;
+	rc = trlmdb_txn_begin(txn->env, txn, 0, &child_txn);
 	if (rc) return rc;
 
-	rc = mdb_put(child_txn, txn->env->dbi_time_to_key, &time_val, key, 0);
+	rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key, 0);
 	if (rc) goto cleanup_child_txn;
 
 	if (is_put_op(time)) {
-		rc = mdb_put(child_txn, txn->env->dbi_time_to_data, &time_val,data, 0);
+		rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_time_to_data, &time_val,data, 0);
 		if (rc) goto cleanup_child_txn;
 	}
 
 	int is_time_most_recent = 1;
 	MDB_val current_time_val;
-	rc = mdb_get(child_txn, txn->env->dbi_key_to_time, key, &current_time_val);
+	rc = mdb_get(child_txn->mdb_txn, txn->env->dbi_key_to_time, key, &current_time_val);
 	if (!rc) {
 		is_time_most_recent = cmp_time(time, current_time_val.mv_data) > 0;
 	}
 
 	if (is_time_most_recent) {
-		rc = mdb_put(child_txn, txn->env->dbi_key_to_time, key, &time_val, 0);
+		rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val, 0);
 		if (rc) goto cleanup_child_txn;
 	}
 
-	rc = mdb_txn_commit(child_txn);
+	rc = trlmdb_node_put_time_all_nodes(child_txn, time);
+	if (rc) goto cleanup_child_txn;
+	
+	rc = trlmdb_txn_commit(child_txn);
 	goto out;
 	
 cleanup_child_txn:
-	mdb_txn_abort(child_txn);
+	trlmdb_txn_abort(child_txn);
 out:	
 	return rc;
 }	
@@ -377,7 +412,8 @@ int trlmdb_node_del(TRLMDB_txn *txn, char *node_name)
 	MDB_val data;
 	rc = mdb_cursor_get(cursor, &node_time_val, &data, MDB_SET_RANGE);
 	while (!rc && node_time_val.mv_size >= node_name_len && memcmp(node_time_val.mv_data, node_name, node_name_len) == 0) {
-		print_mdb_val(&node_time_val);
+		rc = mdb_cursor_del(cursor, 0);
+		if (!rc) break;
 		rc = mdb_cursor_get(cursor, &node_time_val, &data, MDB_NEXT);
 	}
 
