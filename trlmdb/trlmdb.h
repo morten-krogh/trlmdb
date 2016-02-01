@@ -21,9 +21,8 @@ int trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, TRLMD
 MDB_dbi trlmdb_mdb_dbi(TRLMDB_dbi *dbi);
 
 int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data);
-int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *data); 
-int trlmdb_del(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key);
-
+int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *value);
+int trlmdb_del(TRLMDB_txn *txn, MDB_val *key);
 
 
 

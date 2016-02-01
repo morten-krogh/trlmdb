@@ -25,7 +25,7 @@ struct TRLMDB_txn {
 	TRLMDB_env *env;
 	unsigned int flags;
 	u_int8_t time[12];
-	u_int32_t counter;
+	u_int64_t counter;
 };
 
 static void insert_uint32(u_int8_t *dst, const u_int32_t src)
@@ -36,11 +36,22 @@ static void insert_uint32(u_int8_t *dst, const u_int32_t src)
 	*dst++ = (u_int8_t) (src >> 24);
 }
 
+static void insert_uint64(u_int8_t *dst, const u_int64_t src)
+{
+
+	
+
+}
+
 static int is_put_op(u_int8_t *time)
 {
-	return *(time + 15) & 1;
+	return *(time + 19) & 1;
 }
-	
+
+static int cmp_time(u_int8_t *time1, u_int8_t *time2)
+{
+	return memcmp(time1, time2, 20);
+}
 
 int trlmdb_env_create(TRLMDB_env **env)
 {
@@ -176,27 +187,33 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_value, &time_val, data);
 }
 
-int trlmdb_insert_time_key_val(TRLMDB_txn *txn, u_int8_t *time, MDB_val *key, MDB_val *data)
+int trlmdb_insert_time_key_val(TRLMDB_txn *txn, u_int8_t *time, MDB_val *key, MDB_val *value)
 {
 	int rc = 0;
 
-	MDB_val time_val = {16, time};
+	MDB_val time_val = {20, time};
 	
 	MDB_txn *child_txn;
 	rc = mdb_txn_begin(txn->env->mdb_env, txn->mdb_txn, 0, &child_txn);
 	if (rc) return rc;
 
-	rc = put_trlmdb_time(child_txn, txn->time, txn->env->random, data != NULL, txn->env->trlmdb_time_dbi, &ext_key);
+	rc = mdb_put(child_txn, txn->env->dbi_time_to_key, &time_val, key, 0);
 	if (rc) goto cleanup_child_txn;
 
-	rc = put_trlmdb_history(child_txn, txn->env->trlmdb_history_dbi, &ext_key);
-	if (rc) goto cleanup_child_txn;
-
-	if (data) {
-		rc = mdb_put(child_txn, dbi, key, data, 0); 
+	if (is_put_op(time)) {
+		rc = mdb_put(child_txn, txn->env->dbi_time_to_value, &time_val, value, 0);
 		if (rc) goto cleanup_child_txn;
-	} else {
-		rc = mdb_del(child_txn, dbi, key, NULL);
+	}
+
+	int is_time_most_recent = 1;
+	MDB_val current_time_val;
+	rc = mdb_get(child_txn, txn->env->dbi_key_to_time, key, &current_time_val);
+	if (!rc) {
+		is_time_most_recent = cmp_time(time, current_time_val.mv_data) > 0;
+	}
+
+	if (is_time_most_recent) {
+		rc = mdb_put(child_txn, txn->env->dbi_key_to_time, key, &time_val, 0);
 		if (rc) goto cleanup_child_txn;
 	}
 
@@ -209,46 +226,23 @@ out:
 	return rc;
 }	
 
-
-
-
-/*
-static int put_trlmdb_time(MDB_txn *txn, u_int64_t time, u_int32_t random, int put, MDB_dbi trlmdb_time_dbi, MDB_val *ext_key)
+static int trlmdb_put_del(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 {
-	char ext_time[12];
-	extended_time(time, random, put, ext_time);
-	MDB_val val = {12, ext_time};
-	return mdb_put(txn, trlmdb_time_dbi, ext_key, &val, 0);
+	u_int8_t time[20];
+	memmove(time, txn->time, 12);
+	u_int64_t counter = txn->counter + ((value != NULL) ? 1 : 0);
+	insert_uint64(time + 12, counter);
+	txn->counter += 2;
+
+	return trlmdb_insert_time_key_val(txn, time, key, value);
 }
 
-static int put_trlmdb_history(MDB_txn *txn, MDB_dbi trlmdb_history_dbi, MDB_val *ext_key)
+int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 {
-	MDB_cursor *cursor;
-	mdb_cursor_open(txn, trlmdb_history_dbi, &cursor);
-
-	MDB_val key;
-	MDB_val data;
-	int rc = mdb_cursor_get(cursor, &key, &data, MDB_LAST);
-
-	size_t index = 0;
-	if (!rc) {
-		index = *(size_t*) key.mv_data;
-		index++;
-	}
-	
-	key.mv_size = sizeof(size_t);
-	key.mv_data = &index;
-	
-	return mdb_put(txn, trlmdb_history_dbi, &key, ext_key, 0);
-}
-*/
-
-int trlmdb_put(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key, MDB_val *data)
-{
-	return trlmdb_put_del(txn, dbi->name, dbi->mdb_dbi, key, data);
+	return trlmdb_put_del(txn, key, value);
 }
 
-int trlmdb_del(TRLMDB_txn *txn, TRLMDB_dbi *dbi, MDB_val *key)
+int trlmdb_del(TRLMDB_txn *txn, MDB_val *key)
 {
-	return trlmdb_put_del(txn, dbi->name, dbi->mdb_dbi, key, NULL);
+	return trlmdb_put_del(txn, key, NULL);
 }
