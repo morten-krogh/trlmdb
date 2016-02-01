@@ -17,38 +17,37 @@ struct TRLMDB_env {
 	MDB_dbi dbi_time_to_value;
 	MDB_dbi dbi_key_to_time;
 	MDB_dbi dbi_nodes;
-	u_int8_t time_component[4];
+	uint8_t time_component[4];
 };
 
 struct TRLMDB_txn {
 	MDB_txn *mdb_txn;
 	TRLMDB_env *env;
 	unsigned int flags;
-	u_int8_t time[12];
-	u_int64_t counter;
+	uint8_t time[12];
+	uint64_t counter;
 };
 
-static void insert_uint32(u_int8_t *dst, const u_int32_t src)
+static void insert_uint32(uint8_t *dst, const uint32_t src)
 {
-	*dst++ = (u_int8_t) ((src << 24) >> 24);
-	*dst++ = (u_int8_t) ((src << 16) >> 24);
-	*dst++ = (u_int8_t) ((src << 8) >> 24);
-	*dst++ = (u_int8_t) (src >> 24);
+	uint32_t be = htonl(src);
+	memcpy(dst, &be, 4);
 }
 
-static void insert_uint64(u_int8_t *dst, const u_int64_t src)
+static void insert_uint64(uint8_t *dst, const uint64_t src)
 {
-
-	
-
+	uint32_t upper = (uint32_t) (src >> 32) & 0xFFFFFFFF;
+	insert_uint32(dst + 4, upper);
+	uint32_t lower = (uint32_t) src & 0xFFFFFFFF;
+	insert_uint32(dst + 4, lower);
 }
 
-static int is_put_op(u_int8_t *time)
+static int is_put_op(uint8_t *time)
 {
 	return *(time + 19) & 1;
 }
 
-static int cmp_time(u_int8_t *time1, u_int8_t *time2)
+static int cmp_time(uint8_t *time1, uint8_t *time2)
 {
 	return memcmp(time1, time2, 20);
 }
@@ -58,7 +57,7 @@ int trlmdb_env_create(TRLMDB_env **env)
 	TRLMDB_env *db_env = calloc(1, sizeof *db_env);
 	if (!db_env) return ENOMEM;
 
-	u_int32_t random = arc4random();
+	uint32_t random = arc4random();
 	insert_uint32(db_env->time_component, random);
 	
 	int rc = mdb_env_create(&(db_env->mdb_env));
@@ -131,11 +130,11 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 		int rc = gettimeofday(&tv, NULL);
 		if (rc) goto cleanup_txn;
 
-		insert_uint32(db_txn->time, (u_int32_t) tv.tv_sec);
+		insert_uint32(db_txn->time, (uint32_t) tv.tv_sec);
 		
-		u_int64_t usec = (u_int64_t) tv.tv_usec;
-		u_int64_t frac_sec = (usec << 32) / 1000000;
-		insert_uint32(db_txn->time + 4, (u_int32_t) frac_sec);
+		uint64_t usec = (uint64_t) tv.tv_usec;
+		uint64_t frac_sec = (usec << 32) / 1000000;
+		insert_uint32(db_txn->time + 4, (uint32_t) frac_sec);
 	}
 
 	memmove(db_txn->time + 8, env->time_component, 4);
@@ -187,7 +186,7 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_value, &time_val, data);
 }
 
-int trlmdb_insert_time_key_val(TRLMDB_txn *txn, u_int8_t *time, MDB_val *key, MDB_val *value)
+int trlmdb_insert_time_key_val(TRLMDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *value)
 {
 	int rc = 0;
 
@@ -228,9 +227,9 @@ out:
 
 static int trlmdb_put_del(TRLMDB_txn *txn, MDB_val *key, MDB_val *value)
 {
-	u_int8_t time[20];
+	uint8_t time[20];
 	memmove(time, txn->time, 12);
-	u_int64_t counter = txn->counter + ((value != NULL) ? 1 : 0);
+	uint64_t counter = txn->counter + ((value != NULL) ? 1 : 0);
 	insert_uint64(time + 12, counter);
 	txn->counter += 2;
 
