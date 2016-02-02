@@ -22,17 +22,42 @@ the binaries, B1, B2, ..., Bn has the following form
 
 message_length length_B1 B1 length_B2 B2 .... length_Bn Bn
 
-The length do not include themselves, so the total length is message_length plus the length of the prefix itself.
+The messages are defined in message.c.
 
-A length is encoded in big endian format using a vriable number of bytes.  The rule is that the most
-significant bit in the bytes of the length are control bits.  The last byte in the length has a
-value of 0 for the most significant bit. The previous bytes start with the bit 1.  The length is the
-valuer obtained by conctenating the lower 7 bits from all bytes.
 
-Examples:
+The messages are:
 
-0 < length < 127: 0xxxxxxx
-200 = 128 + 64 + 8: 10000001 01001000
+1.
+"node" - node_name
 
-The messages 
+This message is sent by the nodes at the beginning of the tcp connection. The replicators will not
+proceed unless they know each other's node name.
+
+2.
+
+"time" - local_has_key_value - local_knows_that_remote_has_key_value - time - key - value
+
+local is the sender of the message.
+remote is the receiver of the message.
+
+local_has_key_value is true or false. It is true if the sender knows the key and value for the time stamp.
+
+local_knows_that_remote_has_key_value is true or false. It is true if the sender knows that the receiving node knows the key and value for the time stamp.
+
+time is the 20 byte time stamp.
+
+key and value are optional. Their presence is seen from the length.
+
+The two nodes send the second type of message back and forth and update each other. The gal is to have both nodes know all time stamps and key values and know that the other node knows them as well.
+
+
+State machine
+
+The replicator 
+
+
+
+
+
+
 
