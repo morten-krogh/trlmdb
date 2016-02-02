@@ -1,9 +1,9 @@
 #include <stdlib.h>
 
-int encode_length(uint64_t number, void* buffer)
+size_t encode_length(uint64_t number, void* buffer)
 {
 	int has_started = 0;
-	int index = 0;
+	size_t index = 0;
 
 	if (number >> 63) {
 		has_started = 1;
@@ -26,15 +26,15 @@ int encode_length(uint64_t number, void* buffer)
 int decode_length(void *buffer, size_t buffer_size, uint64_t *number)
 {
 	*number = 0;
-	for (int i = 0; i < buffer_size; i++) {
+	for (size_t i = 0; i < buffer_size; i++) {
 		if (i == 11) return 1;
 		uint8_t byte = *(uint8_t*) (buffer + i);
 		if (i < 10) {
 			*number <<= 7;
-			number += byte & 0x7f;
+			*number += byte & 0x7f;
 		} else {
 			*number <<= 1;
-			number += byte &01;
+			*number += byte &01;
 		}
 		if (!(byte >> 7)) {
 			return 0;
@@ -42,3 +42,4 @@ int decode_length(void *buffer, size_t buffer_size, uint64_t *number)
 	}
 	return 1;
 }
+

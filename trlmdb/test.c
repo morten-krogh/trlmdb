@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #include "trlmdb.h"
+#include "message_coder.h"
 
 void print_error(int rc)
 {
@@ -9,7 +11,38 @@ void print_error(int rc)
 	exit(rc);
 }
 
-int main (void)
+void test_encode_decode(uint64_t number)
+{
+	uint8_t buffer[10];
+	size_t buffer_size = encode_length(number, buffer);
+
+	uint64_t result_number;
+	int rc = decode_length(buffer, buffer_size, &result_number);
+
+	printf("number = %llu, result_number = %llu, buffer size = %zu, buffer = ", number, result_number, buffer_size);
+	for (size_t i = 0; i < buffer_size; i++) {
+		printf("%02x", *(uint8_t *)(buffer + i));
+	}
+	printf("\n");
+
+	assert(number == result_number); 
+}
+
+void test_message_coder()
+{
+	test_encode_decode(0);
+	test_encode_decode(1);
+	test_encode_decode(127);
+	test_encode_decode(128);
+	test_encode_decode(128);
+	test_encode_decode(1000);
+	test_encode_decode(1000000);
+	test_encode_decode(12345678912345);
+
+	test_encode_decode(12345678912345678);
+}
+
+void trlmdb_test (void)
 {
 	int rc = 0;
 	TRLMDB_env *env;
@@ -150,4 +183,11 @@ int main (void)
 	if (rc) print_error(rc);
 
 	trlmdb_env_close(env);
+}
+
+int main (void)
+{
+	test_message_coder();
+
+	return 0;
 }

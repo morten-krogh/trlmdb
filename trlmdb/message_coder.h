@@ -11,14 +11,15 @@
  */
 
 /* The number is encoded into the buffer which must be long enough.
+ * A buffer length of 10 is alway enough.
  * Return value: The length of the encoded buffer 
  */
-int encode_length(uint64_t number, void* buffer);
+size_t encode_length(uint64_t number, void* buffer);
 
 /* The buffer should contain an encoding of a number
  * Return value: 0 on succes, 1 on overflow.
  */
-int decode_length(void *buffer, size_t buffer_size; uint64_t *number);
+int decode_length(void *buffer, size_t buffer_size, uint64_t *number);
 
 	
 #endif
