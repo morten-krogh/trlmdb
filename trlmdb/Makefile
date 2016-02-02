@@ -11,6 +11,9 @@ midl.o: midl.c midl.h
 trlmdb.o: trlmdb.h trlmdb.c
 	cc -O0 -c trlmdb.c 
 
+message_coder.o: message_coder.h message_coder.c
+	cc -O0 -c message_coder.c
+
 test: test.c trlmdb.o mdb.o midl.o
 	cc -O0 trlmdb.o midl.o mdb.o test.c -o test
 
