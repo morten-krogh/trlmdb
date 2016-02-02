@@ -25,3 +25,4 @@ test: test.c trlmdb.o mdb.o midl.o message.o
 clean:
 	@- rm test
 	@- rm testdb/*.mdb
+	@- rm *.o

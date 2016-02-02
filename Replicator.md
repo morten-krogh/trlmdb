@@ -35,14 +35,13 @@ proceed unless they know each other's node name.
 
 2.
 
-"time" - local_has_key_value - local_knows_that_remote_has_key_value - time - key - value
+"time" - flag - time - key - value
 
-local is the sender of the message.
-remote is the receiver of the message.
+flag is "tt", "tf", "ft", or "ff" where f is false and t is true.
+The first boolean in the flag describes whether the sender knows the key/value for the time stamp.
+The second boolean describes whether the sender knows that the receiver has the key/value for the time stamp.
 
-local_has_key_value is true or false. It is true if the sender knows the key and value for the time stamp.
-
-local_knows_that_remote_has_key_value is true or false. It is true if the sender knows that the receiving node knows the key and value for the time stamp.
+The end goal of the two communicating nodes is to get into the "tt" state for both nodes.
 
 time is the 20 byte time stamp.
 
@@ -54,10 +53,6 @@ The two nodes send the second type of message back and forth and update each oth
 State machine
 
 The replicator 
-
-
-
-
 
 
 
