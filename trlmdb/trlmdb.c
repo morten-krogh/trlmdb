@@ -48,7 +48,7 @@ static void insert_uint32(uint8_t *dst, const uint32_t src)
 static void insert_uint64(uint8_t *dst, const uint64_t src)
 {
 	uint32_t upper = (uint32_t) (src >> 32);
-	insert_uint32(dst + 4, upper);
+	insert_uint32(dst, upper);
 	uint32_t lower = (uint32_t) src & 0xFFFFFFFF;
 	insert_uint32(dst + 4, lower);
 }

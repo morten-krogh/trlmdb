@@ -1,5 +1,25 @@
-#ifndef MESSAGE_CODER_H
-#define MESSAGE_CODER_H
+#ifndef MESSAGE_H
+#define MESSAGE_H
+
+struct message {
+	uint8_t *buffer;
+	uint64_t capacity;
+	uint64_t size;
+};
+
+struct message *message_alloc_init();
+void message_free(struct message *msg);
+int message_append(struct message *msg, uint8_t *data, uint64_t size);
+int message_get_comp(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size);
+
+
+
+
+
+
+
+
+
 
 /* The encoding of an unsigned integer is a series of bytes where the most significant bit
  * is one except for the last byte where it is zero. The value of an encoded series of bytes is
@@ -14,12 +34,12 @@
  * A buffer length of 10 is alway enough.
  * Return value: The length of the encoded buffer 
  */
-size_t encode_length(uint64_t number, void* buffer);
+// size_t encode_length(uint64_t number, void* buffer);
 
 /* The buffer should contain an encoding of a number
  * Return value: 0 on succes, 1 on overflow.
  */
-int decode_length(void *buffer, size_t buffer_size, uint64_t *number);
+// int decode_length(void *buffer, size_t buffer_size, uint64_t *number);
 
 	
 #endif
