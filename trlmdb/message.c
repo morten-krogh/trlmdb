@@ -3,14 +3,6 @@
 
 #include "message.h"
 
-/*
-struct message {
-	uint8_t *buffer;
-	uint64_t capacity;
-	uint64_t size;
-};
-*/
-
 static void insert_uint32(uint8_t *dst, const uint32_t src)
 {
 	uint32_t be = htonl(src);
@@ -56,6 +48,18 @@ void message_free(struct message *msg)
 	free(msg);
 }
 
+struct message *message_from_prefix_buffer(uint8_t *buffer)
+{
+	struct message *msg = malloc(sizeof *msg);
+	if (!msg) return NULL;
+
+	uint64_t size = decode_length(buffer);
+	msg->buffer = buffer + 8;
+	msg->size = size;
+	msg->capacity = size;
+
+	return msg;
+}
 
 int message_append(struct message *msg, uint8_t *data, uint64_t size)
 {
@@ -77,7 +81,7 @@ int message_append(struct message *msg, uint8_t *data, uint64_t size)
 
 uint64_t message_get_count(struct message *msg)
 {
-	uint8_t buffer = msg->buffer;
+	uint8_t *buffer = msg->buffer;
 	uint64_t remaining = msg->size;
 	uint64_t count = 0;
 	while (remaining >= 8) {
@@ -92,66 +96,20 @@ uint64_t message_get_count(struct message *msg)
 
 int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
 {
-
-
-
-
-
-
-}
-
-
-
-
-
-
-
-
-
-
-/*
-
-size_t encode_length(uint64_t number, void* buffer)
-{
-	int has_started = 0;
-	size_t index = 0;
-
-	if (number >> 63) {
-		has_started = 1;
-		* (uint8_t*) buffer = (uint8_t) 129;
-		index++;
-	}
-
-	for (int i = 8; i >= 0; i--) {
-		uint8_t byte = (uint8_t)((number >> 7 * i) & 0x7f);
-		if (byte || i == 0) has_started = 1;
-		if (has_started) {
-			if (i > 0) byte |= 0x80;
-			*(uint8_t*) (buffer + index) = byte;
-			index++;
-		}
-	}
-	return index;
-}
-
-int decode_length(void *buffer, size_t buffer_size, uint64_t *number)
-{
-	*number = 0;
-	for (size_t i = 0; i < buffer_size; i++) {
-		if (i == 11) return 1;
-		uint8_t byte = *(uint8_t*) (buffer + i);
-		if (i < 10) {
-			*number <<= 7;
-			*number += byte & 0x7f;
-		} else {
-			*number <<= 1;
-			*number += byte &01;
-		}
-		if (!(byte >> 7)) {
+	uint8_t *buffer = msg->buffer;
+	uint64_t remaining = msg->size;
+	uint64_t count = 0;
+	while (remaining >= 8) {
+		uint64_t length = decode_length(buffer);
+		if (remaining < 8 + length) return 1;
+		if (index == count) {
+			*data = buffer + 8;
+			*size = length;
 			return 0;
 		}
-	}
+		count++;
+		remaining -= 8 + length;
+		buffer += 8 + length;
+	}	
 	return 1;
 }
-
-*/
