@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,8 +20,8 @@ static void insert_uint64(uint8_t *dst, const uint64_t src)
 
 static uint64_t decode_length(uint8_t *buffer)
 {
-	uint64_t upper = (uint64_t) ntohl((uint32_t) buffer);
-	uint64_t lower = (uint64_t) ntohl((uint32_t) (buffer + 4));
+	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buffer);
+	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buffer + 4));
 
 	return (upper << 32) + lower;
 }
@@ -75,6 +76,7 @@ int message_append(struct message *msg, uint8_t *data, uint64_t size)
 	msg->size += 8;
 
 	memcpy(msg->buffer + msg->size, data, size);
+	msg->size += size;
 	
 	return 0;
 }

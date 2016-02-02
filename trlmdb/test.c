@@ -3,7 +3,7 @@
 #include <assert.h>
 
 #include "trlmdb.h"
-#include "message_coder.h"
+#include "message.h"
 
 void print_error(int rc)
 {
@@ -11,35 +11,34 @@ void print_error(int rc)
 	exit(rc);
 }
 
-void test_encode_decode(uint64_t number)
+void print_buffer(uint8_t *buffer, uint64_t size)
 {
-	uint8_t buffer[10];
-	size_t buffer_size = encode_length(number, buffer);
-
-	uint64_t result_number;
-	int rc = decode_length(buffer, buffer_size, &result_number);
-
-	printf("number = %llu, result_number = %llu, buffer size = %zu, buffer = ", number, result_number, buffer_size);
-	for (size_t i = 0; i < buffer_size; i++) {
+	printf("size = %llu\n", size);
+	for (uint64_t i = 0; i < size; i++) {
 		printf("%02x", *(uint8_t *)(buffer + i));
 	}
 	printf("\n");
-
-	assert(number == result_number); 
 }
 
-void test_message_coder()
+void test_message()
 {
-	test_encode_decode(0);
-	test_encode_decode(1);
-	test_encode_decode(127);
-	test_encode_decode(128);
-	test_encode_decode(128);
-	test_encode_decode(1000);
-	test_encode_decode(1000000);
-	test_encode_decode(12345678912345);
+	struct message *msg = message_alloc_init();
+	message_append(msg, (uint8_t*) "morten", 6);
+	message_append(msg, (uint8_t*) "abc", 3);
+	print_buffer(msg->buffer, msg->size);
 
-	test_encode_decode(12345678912345678);
+	uint64_t count = message_get_count(msg);
+	printf("count = %llu\n", count);
+
+	uint8_t *data;
+	uint64_t size;
+	
+	message_get_elem(msg, 0, &data, &size);
+	print_buffer(data, size);
+
+	message_get_elem(msg, 1, &data, &size);
+	print_buffer(data, size);
+	
 }
 
 void trlmdb_test (void)
@@ -187,7 +186,7 @@ void trlmdb_test (void)
 
 int main (void)
 {
-	test_message_coder();
+	test_message();
 
 	return 0;
 }

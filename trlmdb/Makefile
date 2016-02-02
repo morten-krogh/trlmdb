@@ -14,8 +14,8 @@ trlmdb.o: trlmdb.h trlmdb.c
 message.o: message.h message.c
 	cc -O0 -c message.c
 
-test: test.c trlmdb.o mdb.o midl.o message_coder.o
-	cc -O0 trlmdb.o midl.o mdb.o message_coder.o test.c -o test
+test: test.c trlmdb.o mdb.o midl.o message.o
+	cc -O0 trlmdb.o midl.o mdb.o message.o test.c -o test
 
 .PHONY: clean
 
