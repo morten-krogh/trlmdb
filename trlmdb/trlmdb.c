@@ -4,6 +4,11 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <ctype.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #include "trlmdb.h"
 
@@ -42,6 +47,27 @@ struct TRLMDB_cursor {
 	MDB_cursor *mdb_cursor;
 };
 
+void print_error(char *err)
+{
+	fprintf(stderr, "%s\n", err);
+}
+
+void print_error_and_exit(char *err)
+{
+	print_error(err);
+	exit(1);
+}
+
+void print_mdb_error(int rc)
+{
+	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
+}
+
+void print_mdb_error_and_exit(int rc)
+{
+	print_mdb_error(rc);
+	exit(rc);
+}
 
 static void insert_uint32(uint8_t *dst, const uint32_t src)
 {
@@ -805,14 +831,130 @@ out:
 	return conf_info;
 }
 
+/* Replicator state */
+
+struct replicator_state {
+	char *node;
+	int socket_fd;
+	TRLMDB_env *env;
+};
+
+/* Network code */
+
+int create_listener(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
+{
+	struct addrinfo hints;
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = ai_family;
+	hints.ai_socktype = SOCK_STREAM;
+
+	struct addrinfo *res;
+	int status;
+	
+	if ((status = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
+		return -1;
+	}
+
+	int listen_fd = -1;
+	struct addrinfo *addrinfo;
+	for (addrinfo = res; addrinfo != NULL; addrinfo = addrinfo->ai_next) {
+		if ((listen_fd = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol)) == -1) {
+			perror("socket: ");
+			continue;
+		}
+
+		int socket_option_value = 1;
+		setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &socket_option_value, sizeof(int));
+		
+		if (bind(listen_fd, addrinfo->ai_addr, addrinfo->ai_addrlen) == -1) {
+			close(listen_fd);
+			perror("bind: ");
+			continue;
+		}
+
+		break;
+	}
+
+	if (addrinfo == NULL) {
+		fprintf(stderr, "Check that the host and port are correct, that the port is not used by another process and that the process has the right permission\n");
+		return -1;
+	}
+
+	if (socket_addr != NULL) {
+		*socket_addr = *addrinfo->ai_addr;
+	}
+
+	freeaddrinfo(res);
+	
+	int backlog = 20;
+	if (listen(listen_fd, backlog) == -1) {
+		perror("Error in listen(): ");
+		return -1;
+	}
+
+	return listen_fd;
+}
+
+void *replicator_connection_handler(void *replicator_state);
+
+void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
+{
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	for (;;) {
+		struct sockaddr_storage remote_addr;
+		socklen_t remote_addr_len = sizeof remote_addr;
+
+		int accepted_fd = accept(listen_fd, (struct sockaddr *) &remote_addr, &remote_addr_len);
+		if (accepted_fd == -1) continue;
+
+		struct replicator_state *replicator_state = malloc(sizeof replicator_state);
+		if (!replicator_state) continue;
+		replicator_state->node = node;
+		replicator_state->socket_fd = accepted_fd;
+		replicator_state->env = env;
+		
+		pthread_t thread;
+		if (pthread_create(&thread, &attr, replicator_connection_handler, replicator_state) != 0) {
+			close(accepted_fd);
+			free(replicator_state);
+		}
+	}
+}
+
 /* The replicator server */
 
 void replicator(struct conf_info conf_info)
 {
+	int rc = 0;
+	TRLMDB_env *env;
+
+	rc = trlmdb_env_create(&env);
+	if (rc) print_error_and_exit("The lmdb environment could not be created"); 
+
+	rc = trlmdb_env_open(env, conf_info.path, 0, 0644);
+	if (rc) print_error_and_exit("The database could not be opened");
+
+
+	
+	if (conf_info.port) {
+		int listen_fd = create_listener(PF_UNSPEC, "localhost", conf_info.port, NULL);
+		
+	}
+}
+
+
+/* The replicator thread start routine */
+
+void *replicator_connection_handler(void *replicator_state)
+{
 
 
 
-
-
-
+	return NULL;
 }
