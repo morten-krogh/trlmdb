@@ -11,14 +11,8 @@ midl.o: midl.c midl.h
 trlmdb.o: trlmdb.h trlmdb.c
 	cc -O0 -c trlmdb.c 
 
-message.o: message.h message.c
-	cc -O0 -c message.c
-
-handle_message.o: handle_message.h handle_message.c
-	cc -O0 -c handle_message.c
-
-test: test.c trlmdb.o mdb.o midl.o message.o
-	cc -O0 trlmdb.o midl.o mdb.o message.o test.c -o test
+test: test.c trlmdb.c mdb.o midl.o
+	cc -O0 midl.o mdb.o test.c -o test
 
 .PHONY: clean
 

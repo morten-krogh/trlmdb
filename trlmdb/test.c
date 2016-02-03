@@ -2,8 +2,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#include "trlmdb.h"
-#include "message.h"
+#include "trlmdb.c"
 
 void print_error(int rc)
 {

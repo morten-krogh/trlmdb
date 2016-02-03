@@ -656,7 +656,7 @@ int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int
 
 	MDB_val key;
 	
-	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_key, &time_val, &key);
+	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, &key);
 
 	
 
