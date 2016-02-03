@@ -951,6 +951,35 @@ void replicator(struct conf_info conf_info)
 	}
 }
 
+/* Length prefixed messages */
+
+struct lmessage {
+	struct message *msg;
+	uint8_t length_msg[8];
+	uint64_t written;
+	int done;
+};
+
+struct lmessage *lmessage_init(struct lmessage *lmsg, struct message *msg)
+{
+	lmsg->msg = msg;
+	insert_uint64(lmsg->length_msg, msg->size);
+	lmsg->written = 0;
+	lmsg->done = 0;
+	return lmsg;
+}
+
+ssize_t lmessage_write_blocking(struct lmessage *lmsg, int fd)
+{
+	while (lmsg->written < 8 + lmsg.msg.size) {
+		if (lmsg->written < 8) {
+			ssize_t written = write(fd, lmsg->length_msg + lmsg->written, 8 - lmsg->written);
+			lmsg->written += written;
+		} else {
+			
+	
+}
+
 /* The replicator thread start routine */
 
 void *replicator_connection_handler(void *replicator_state)
@@ -965,7 +994,11 @@ void *replicator_connection_handler(void *replicator_state)
 	int rc = write_node_name_message(&msg, node);
 	if (rc) goto close;
 
-	write(socket_fd, msg.buffer, msg.size);
+	int nwritten = 0;
+	while (nwritten < msg.size) {
+		int nbytes = write(socket_fd, msg.buffer + nwritten, msg.size - nwritten);
+		nwritten += nbytes;
+	}
 	
 	sleep(1);
 
