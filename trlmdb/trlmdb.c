@@ -976,8 +976,9 @@ ssize_t lmessage_write_blocking(struct lmessage *lmsg, int fd)
 			ssize_t written = write(fd, lmsg->length_msg + lmsg->written, 8 - lmsg->written);
 			lmsg->written += written;
 		} else {
-			
-	
+			ssize_t written = write(fd, lmsg->msg + lmsg->written - 8, lmsg->msg.size - lmsg->written + 8);
+			lmsg->written += written;
+		}
 }
 
 /* The replicator thread start routine */
