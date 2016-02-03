@@ -1,10 +1,48 @@
 #include <string.h>
+#include <stdlib.h>
 
 #include "trlmdb.h"
 #include "message.h"
 #include "handle_message.h"
 
-int handle_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
+char *read_node_name_message(struct message *msg)
+{
+	uint64_t count = message_get_count(msg);
+	if (count != 2) return NULL;
+
+	uint8_t *data;
+	uint64_t size;
+	
+	int rc = message_get_elem(msg, 0, &data, & size);
+	if (rc) return NULL;
+
+	if (size != 4 || memcmp(data, "node", 4) != 0) return NULL;
+
+	rc = message_get_elem(msg, 1, &data, &size);
+	if (rc) return NULL;
+
+	char *node_name = malloc(size + 1);
+	if (!node_name) return NULL;
+
+	memcpy(node_name, data, size);
+	node_name[size] = '\0';
+
+	return node_name;
+}
+
+int write_node_name_message(struct message *msg, char *node_name)
+{
+	msg->size = 0;
+
+	int rc = message_append(msg, (uint8_t*) "node", 4); 
+	if (rc) return rc;
+
+	rc = message_append(msg, (uint8_t*)node_name, strlen(node_name));
+
+	return rc;
+}
+
+int read_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 {
 	uint64_t count = message_get_count(msg);
 	if (count < 3 || count > 5) return 1;
@@ -15,7 +53,7 @@ int handle_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message 
 	int rc = message_get_elem(msg, 0, &data, & size);
 	if (rc) return 1;
 
-	if (size != 4 ||  memcmp(data, "time", 4) != 0) return 1;
+	if (size != 4 || memcmp(data, "time", 4) != 0) return 1;
 
 	uint8_t *flag;
 	rc = message_get_elem(msg, 1, &flag, &size);
