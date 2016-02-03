@@ -910,7 +910,9 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		struct sockaddr_storage remote_addr;
 		socklen_t remote_addr_len = sizeof remote_addr;
 
+		printf("ready to accept\n");
 		int accepted_fd = accept(listen_fd, (struct sockaddr *) &remote_addr, &remote_addr_len);
+		printf("accepted = %d\n", accepted_fd);
 		if (accepted_fd == -1) continue;
 
 		struct replicator_state *replicator_state = malloc(sizeof replicator_state);
@@ -921,6 +923,7 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		
 		pthread_t thread;
 		if (pthread_create(&thread, &attr, replicator_connection_handler, replicator_state) != 0) {
+			printf("hello\n");
 			close(accepted_fd);
 			free(replicator_state);
 		}
@@ -943,18 +946,30 @@ void replicator(struct conf_info conf_info)
 
 	
 	if (conf_info.port) {
-		int listen_fd = create_listener(PF_UNSPEC, "localhost", conf_info.port, NULL);
-		
+		int listen_fd = create_listener(PF_INET, "localhost", conf_info.port, NULL);
+		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info.node);
 	}
 }
-
 
 /* The replicator thread start routine */
 
 void *replicator_connection_handler(void *replicator_state)
 {
+	char *node = ((struct replicator_state*) replicator_state)->node;
+	int socket_fd = ((struct replicator_state*) replicator_state)->socket_fd;
+	TRLMDB_env *env = ((struct replicator_state*) replicator_state)->env;
+	free(replicator_state);
 
+	struct message msg;
 
+	int rc = write_node_name_message(&msg, node);
+	if (rc) goto close;
 
+	write(socket_fd, msg.buffer, msg.size);
+	
+	sleep(1);
+
+close:
+	close(socket_fd);
 	return NULL;
 }
