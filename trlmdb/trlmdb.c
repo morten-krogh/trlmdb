@@ -14,6 +14,9 @@
 
 #define TIME_LENGTH 20
 
+
+/* Managing the lmdb environment with the special databases */  
+
 struct TRLMDB_env {
 	MDB_env *mdb_env;
 	MDB_dbi dbi_time_to_key;
@@ -74,7 +77,7 @@ static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
 	if (!node_time) return ENOMEM;
 	
 	MDB_val node_val, data;
-	MDB_val node_time_data = {1, "n"};
+	MDB_val node_time_data = {2, "ff"};
 	while ((rc = mdb_cursor_get(cursor, &node_val, &data, MDB_NEXT)) == 0) {
 		if (node_val.mv_size > node_time_size - TIME_LENGTH) {
 			node_time_size = node_val.mv_size + TIME_LENGTH;
@@ -432,3 +435,236 @@ int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key)
 	MDB_val time_val = {20, time};
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
 }
+
+/* Messages */
+
+struct message {
+	uint8_t *buffer;
+	uint64_t size;
+	uint64_t capacity;
+};
+
+static uint64_t decode_length(uint8_t *buffer)
+{
+	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buffer);
+	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buffer + 4));
+
+	return (upper << 32) + lower;
+}
+
+struct message *message_alloc_init()
+{
+	struct message *msg = malloc(sizeof *msg);
+	if (!msg) return NULL;
+
+	msg->buffer = malloc(256);
+	if (!msg->buffer) {
+		free(msg);
+		return NULL;
+	}
+
+	msg->capacity = 256;
+	msg->size = 0;
+
+	return msg;
+}
+
+void message_free(struct message *msg)
+{
+	free(msg->buffer);
+	free(msg);
+}
+
+struct message *message_from_prefix_buffer(uint8_t *buffer)
+{
+	struct message *msg = malloc(sizeof *msg);
+	if (!msg) return NULL;
+
+	uint64_t size = decode_length(buffer);
+	msg->buffer = buffer + 8;
+	msg->size = size;
+	msg->capacity = size;
+
+	return msg;
+}
+
+int message_append(struct message *msg, uint8_t *data, uint64_t size)
+{
+	uint64_t new_capacity = msg->size + 8 + size;
+	if (new_capacity > msg->capacity) {
+		uint8_t *realloc_buffer = realloc(msg->buffer, new_capacity);
+		if (!realloc_buffer) return 1;
+		msg->buffer = realloc_buffer;
+		msg->capacity = new_capacity;
+	}
+
+	insert_uint64(msg->buffer + msg->size, size);
+	msg->size += 8;
+
+	memcpy(msg->buffer + msg->size, data, size);
+	msg->size += size;
+	
+	return 0;
+}
+
+uint64_t message_get_count(struct message *msg)
+{
+	uint8_t *buffer = msg->buffer;
+	uint64_t remaining = msg->size;
+	uint64_t count = 0;
+	while (remaining >= 8) {
+		uint64_t length = decode_length(buffer);
+		if (remaining < 8 + length) return count;
+		count++;
+		remaining -= 8 + length;
+		buffer += 8 + length;
+	}
+	return count;
+}
+
+int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
+{
+	uint8_t *buffer = msg->buffer;
+	uint64_t remaining = msg->size;
+	uint64_t count = 0;
+	while (remaining >= 8) {
+		uint64_t length = decode_length(buffer);
+		if (remaining < 8 + length) return 1;
+		if (index == count) {
+			*data = buffer + 8;
+			*size = length;
+			return 0;
+		}
+		count++;
+		remaining -= 8 + length;
+		buffer += 8 + length;
+	}	
+	return 1;
+}
+
+/* node name message */
+
+char *read_node_name_message(struct message *msg)
+{
+	uint64_t count = message_get_count(msg);
+	if (count != 2) return NULL;
+
+	uint8_t *data;
+	uint64_t size;
+	
+	int rc = message_get_elem(msg, 0, &data, & size);
+	if (rc) return NULL;
+
+	if (size != 4 || memcmp(data, "node", 4) != 0) return NULL;
+
+	rc = message_get_elem(msg, 1, &data, &size);
+	if (rc) return NULL;
+
+	char *node_name = malloc(size + 1);
+	if (!node_name) return NULL;
+
+	memcpy(node_name, data, size);
+	node_name[size] = '\0';
+
+	return node_name;
+}
+
+int write_node_name_message(struct message *msg, char *node_name)
+{
+	msg->size = 0;
+
+	int rc = message_append(msg, (uint8_t*) "node", 4); 
+	if (rc) return rc;
+
+	rc = message_append(msg, (uint8_t*)node_name, strlen(node_name));
+
+	return rc;
+}
+
+/* time message */
+
+int read_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
+{
+	uint64_t count = message_get_count(msg);
+	if (count < 3 || count > 5) return 1;
+
+	uint8_t *data;
+	uint64_t size;
+	
+	int rc = message_get_elem(msg, 0, &data, & size);
+	if (rc) return 1;
+
+	if (size != 4 || memcmp(data, "time", 4) != 0) return 1;
+
+	uint8_t *flag;
+	rc = message_get_elem(msg, 1, &flag, &size);
+	if (rc) return 1;
+	if (size != 2) return 1;
+	if (flag[0] != 'f' && flag[0] != 'f') return 1;
+	if (flag[1] != 'f' && flag[1] != 'f') return 1;
+	
+	uint8_t *time;
+	
+	rc = message_get_elem(msg, 2, &time, & size);
+	if (rc || size != 20) return 1;
+
+	int is_put = trlmdb_is_put_op(time);
+	
+	MDB_val key;
+	int key_absent = trlmdb_get_key(txn, time, &key);
+
+	if (key_absent && count > 3) {
+		uint8_t *key;
+		uint64_t key_size;
+		rc = message_get_elem(msg, 3, &key, &key_size); 
+		if (rc) return 1;
+
+		MDB_val key_val = {key_size, key};
+		
+		if (is_put && count == 5) {
+			uint8_t *data;
+			uint64_t data_size;
+			rc = message_get_elem(msg, 4, &data, &data_size); 
+			if (rc) return 1;
+			MDB_val data_val = {data_size, data};
+			trlmdb_put(txn, &key_val, &data_val);
+		} else {
+			trlmdb_del(txn, &key_val);
+		}
+	}
+	
+	return trlmdb_node_time_update(txn, remote_node_name, time, flag);	
+}
+
+int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int should_reset_cursor, struct message *msg)
+{
+	MDB_val node_time_val;
+	MDB_val flag_val;
+	int rc;
+	
+	if (should_reset_cursor) {
+		node_time_val.mv_size = strlen(node_name);
+		node_time_val.mv_data = node_name;
+		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
+	} else {
+		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
+	}
+	if (rc) return rc;	
+
+	uint8_t *time = node_time_val.mv_data + (node_time_val.mv_size - 20);
+	MDB_val time_val = {20, time};
+
+	MDB_val key;
+	
+	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_key, &time_val, &key);
+
+	
+
+
+
+
+	return rc;
+}
+
+
+

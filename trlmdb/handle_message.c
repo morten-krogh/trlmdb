@@ -94,3 +94,33 @@ int read_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message *m
 	
 	return trlmdb_node_time_update(txn, remote_node_name, time, flag);	
 }
+
+int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int should_reset_cursor, struct message *msg)
+{
+	MDB_val node_time_val;
+	MDB_val flag_val;
+	int rc;
+	
+	if (should_reset_cursor) {
+		node_time_val.mv_size = strlen(node_name);
+		node_time_val.mv_data = node_name;
+		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
+	} else {
+		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
+	}
+	if (rc) return rc;	
+
+	uint8_t *time = node_time_val.mv_data + (node_time_val.mv_size - 20);
+	MDB_val time_val = {20, time};
+
+	MDB_val key;
+	
+	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_key, &time_val, &key);
+
+	
+
+
+
+
+	return rc;
+}
