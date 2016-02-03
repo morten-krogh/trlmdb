@@ -655,16 +655,35 @@ int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int
 	MDB_val time_val = {20, time};
 
 	MDB_val key;
-	
 	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, &key);
 
+	uint8_t out_flag[2];
+	out_flag[0] = key_known ? 't' : 'f';
+	out_flag[1] = *(uint8_t*)flag_val.mv_data;
+
+	msg->size = 0;
+
+	rc = message_append(msg, (uint8_t*) "time", 4); 
+	if (rc) return rc;
+
+	rc = message_append(msg, out_flag, 2);
+	if (rc) return rc;
+
+	rc = message_append(msg, time, 20);
+	if (rc) return rc;
+
+	if (out_flag[1] == 't' || !key_known) return 0;
+
+	rc = message_append(msg, (uint8_t*)key.mv_data, key.mv_size);
+	if (rc) return rc;
 	
+	if (!trlmdb_is_put_op(time)) return 0;
 
-
-
+	MDB_val data;
+	rc = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, &data);
+	if (rc) return rc;
+	
+	rc = message_append(msg, (uint8_t*)data.mv_data, data.mv_size);
 
 	return rc;
 }
-
-
-
