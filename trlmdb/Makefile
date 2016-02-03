@@ -11,6 +11,9 @@ midl.o: midl.c midl.h
 trlmdb.o: trlmdb.h trlmdb.c
 	cc -O0 -c trlmdb.c 
 
+replicator: replicator.c trlmdb.c midl.o mdb.o
+	cc -O0 midl.o mdb.o replicator.c -o replicator
+
 test: test.c trlmdb.c mdb.o midl.o
 	cc -O0 midl.o mdb.o test.c -o test
 

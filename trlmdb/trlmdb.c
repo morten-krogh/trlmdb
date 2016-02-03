@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <ctype.h>
 
 #include "trlmdb.h"
 
@@ -686,4 +687,132 @@ int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int
 	rc = message_append(msg, (uint8_t*)data.mv_data, data.mv_size);
 
 	return rc;
+}
+
+/*
+ *  Conf file
+ *
+ * A conf file is read by the replicator. The format is
+ * a specification of a port to listen on and a number of
+ * nodes to connect to. All lines are optional. 
+ * 
+ * path: directory or path to the trlmdb database. 
+ * node: the name of this node 
+ * port: listening port 
+ * remote: internet address of remote nodes 
+ *
+ * Example:
+ *
+ * path: user-database 
+ * node: node-1
+ * port: 8000
+ * remote: 192.168.0.1:8000
+ * remote: 192.168.0.2:9000
+ */
+
+struct conf_info {
+	char *path;
+	char *node;
+	char *port;
+	int nremote;
+	char **remote;
+};
+
+/* trim removes leading and trailing whitespace and returns the trimmed string. The argument string is modified. str must have a null terminator */
+char *trim(char *str)
+{
+	char *start = str;
+	while (isspace(*start)) start++;
+
+	if (*start == '\0') return start;
+
+	char *end = start + strlen(start) - 1;
+	while (isspace(*end)) end--;
+
+	*(end + 1) = '\0';
+
+	return start;
+}
+
+struct conf_info parse_conf_file(const char *conf_file, char **err)
+{
+	struct conf_info conf_info = {NULL, NULL, NULL, 0, NULL};
+
+	/* This allocation is not checked, since there is no way of communicating an error if the
+	 * error itself can not be allocated. It will never fail in practice.
+	 */
+	*err = malloc(100);
+	
+	FILE *file;
+	if ((file = fopen(conf_file, "r")) == NULL) {
+		sprintf(*err, "The conf file %s could not be opened", conf_file);
+		return conf_info;
+	}
+
+	char line[1024];
+	for (;;) {
+		if (fgets(line, sizeof line, file) == NULL) break;
+		if (strlen(line) >= sizeof line - 1) {
+			sprintf(*err, "The conf file has too long lines");
+			goto out;
+		}
+
+		char *right = line;
+		char *left = strsep(&right, ":");
+		if (right == NULL) continue;
+
+		left = trim(left);
+		right = trim(right);
+
+		if (strcmp(left, "path") == 0) {
+			conf_info.path = strdup(right);
+		} else if (strcmp(left, "node") == 0) {
+			conf_info.node = strdup(right);
+		} else if (strcmp(left, "port") == 0) {
+			conf_info.port = strdup(right);
+		} else if (strcmp(left, "remote") == 0) {
+			conf_info.nremote++;
+			/* Allocation should not fail this early */ 
+			conf_info.remote = realloc(conf_info.remote, conf_info.nremote);
+		}
+	}
+
+	if (!feof(file)) {
+		sprintf(*err, "There was a problem reading the conf file");
+		goto out;
+	}
+
+	if (!conf_info.path) {
+		sprintf(*err, "There is no path in the conf file");
+		goto out;
+	}
+
+	if (!conf_info.node) {
+		sprintf(*err, "There is no node name in the conf file");
+		goto out;
+	}
+
+	if (!conf_info.port && conf_info.nremote == 0) {
+		sprintf(*err, "There is no port and no remote internet addresses in the conf file");
+		goto out;
+	}
+	
+	free(*err);
+	*err = NULL;
+
+out:
+	fclose(file);
+	return conf_info;
+}
+
+/* The replicator server */
+
+void replicator(struct conf_info conf_info)
+{
+
+
+
+
+
+
 }
