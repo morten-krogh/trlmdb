@@ -1,0 +1,3 @@
+node: node-1
+path: testdb
+port: 8000

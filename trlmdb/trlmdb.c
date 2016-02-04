@@ -9,6 +9,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <poll.h>
 
 #include "trlmdb.h"
 
@@ -17,9 +18,6 @@
 #define DB_KEY_TO_TIME "db_key_to_time"
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
-
-#define TIME_LENGTH 20
-
 
 /* Managing the lmdb environment with the special databases */  
 
@@ -106,14 +104,14 @@ static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
 	MDB_val node_val, data;
 	MDB_val node_time_data = {2, "ff"};
 	while ((rc = mdb_cursor_get(cursor, &node_val, &data, MDB_NEXT)) == 0) {
-		if (node_val.mv_size > node_time_size - TIME_LENGTH) {
-			node_time_size = node_val.mv_size + TIME_LENGTH;
+		if (node_val.mv_size > node_time_size - 20) {
+			node_time_size = node_val.mv_size + 20;
 			node_time = realloc(node_time, node_time_size);
 			if (!node_time) goto cleanup_node_time;
 		}
 		memcpy(node_time, node_val.mv_data, node_val.mv_size);
-		memcpy(node_time + node_val.mv_size, time, TIME_LENGTH);
-		MDB_val node_time_key = {node_val.mv_size + TIME_LENGTH, node_time};
+		memcpy(node_time + node_val.mv_size, time, 20);
+		MDB_val node_time_key = {node_val.mv_size + 20, node_time};
 		rc = mdb_put(txn->mdb_txn, txn->env->dbi_node_time, &node_time_key, &node_time_data, 0);
 		if (rc) break;
 	}
@@ -883,6 +881,7 @@ struct rstate {
 	uint64_t read_buffer_size;
 	int read_buffer_loaded;
 	struct message write_msg;
+	uint64_t write_msg_nwritten;
 	int write_msg_loaded;
 	uint8_t time_of_write_cursor[20];
 	int end_of_write_loop;
@@ -1172,8 +1171,7 @@ void receive_node_msg(struct rstate *rs)
 			rs->read_buffer = realloced;
 			rs->read_buffer_capacity *= 2;
 		}
-		int nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
-		printf("nread = %d\n", nread);
+		ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
 		if (nread < 1) {
 			rs->connection_is_open = 0;
 			return;
@@ -1183,6 +1181,9 @@ void receive_node_msg(struct rstate *rs)
 		msg = message_from_buffer(rs->read_buffer, rs->read_buffer_size, 0);
 	}
 
+	memmove(rs->read_buffer, rs->read_buffer + msg->size, rs->read_buffer_size - msg->size);
+	rs->read_buffer_size -= msg->size;
+       	
 	rs->remote_node = read_node_name_msg(msg);
 
 	if (!rs->remote_node) rs->connection_is_open = 0;
@@ -1190,12 +1191,30 @@ void receive_node_msg(struct rstate *rs)
 
 void read_messages_from_buffer(struct rstate *rs)
 {
-
+	
 }
 
 void read_from_socket(struct rstate *rs)
 {
+	if (rs->read_buffer_size == rs->read_buffer_capacity) {
+		uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
+		if (!realloced) {
+			rs->connection_is_open = 0;
+			return;
+		}
+		rs->read_buffer = realloced;
+		rs->read_buffer_capacity *= 2;
+	}
 
+	ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
+	if (nread < 1) {
+		rs->connection_is_open = 0;
+		return;
+	}
+
+	rs->read_buffer_size += nread;
+	rs->socket_readable = 0;
+	printf("nread = %zu\n", nread);
 }
 
 void load_write_msg(struct rstate *rs)
@@ -1205,12 +1224,49 @@ void load_write_msg(struct rstate *rs)
 
 void write_to_socket(struct rstate *rs)
 {
+	size_t nwritten = write(rs->socket_fd, rs->write_msg.buffer, rs->write_msg.size - rs->write_msg_nwritten);
+	if (nwritten < 1) {
+		rs->connection_is_open = 0;
+		return;
+	}
 
+	rs->write_msg_nwritten += nwritten;
+
+	if (rs->write_msg.size == rs->write_msg_nwritten) {
+		rs->write_msg_nwritten = 0;
+		message_reset(&rs->write_msg);
+		rs->write_msg_loaded = 0;
+	}
+
+	rs->socket_writable = 0;
 }
 
 void poll_socket(struct rstate *rs)
 {
-
+	int timeout = 1000;
+	
+	struct pollfd pollfd;
+	pollfd.fd = rs->socket_fd;
+	pollfd.events = POLLRDNORM | POLLWRNORM;
+	int rc = poll(&pollfd, 1, timeout);
+	if (rc == 0) {
+		rs->end_of_write_loop = 0;
+	} else if (rc == 1) {
+		if (pollfd.revents | (POLLHUP & POLLNVAL)) {
+			printf("POLLHUP\n");
+			rs->connection_is_open = 0;
+			return;
+		}
+		if (pollfd.revents | POLLRDNORM) {
+			printf("POLLRDNORM\n");
+			rs->end_of_write_loop = 0;
+			rs->socket_readable = 1;
+		}
+		if (pollfd.revents | POLLWRNORM) {
+			printf("POLWRDNORM\n");
+			rs->socket_writable = 1;
+		}
+	}
 }
 
 void replicator_iteration(struct rstate *rs)
