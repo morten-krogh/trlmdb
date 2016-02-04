@@ -1136,6 +1136,7 @@ void receive_node_msg(struct rstate *rs)
 			rs->read_buffer_capacity *= 2;
 		}
 		int nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
+		printf("nread = %d\n", nread);
 		if (nread == -1) {
 			rs->connection_is_open = 0;
 			return;
