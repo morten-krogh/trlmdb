@@ -479,21 +479,29 @@ static uint64_t decode_length(uint8_t *buffer)
 	return (upper << 32) + lower;
 }
 
+struct message *message_init(struct message *msg)
+{
+	msg->buffer = malloc(256);
+	if (!msg->buffer) return NULL;
+
+	msg->capacity = 256;
+	insert_uint64(msg->buffer, 8);
+	msg->size = 8;
+
+	return msg;
+}
+
 struct message *message_alloc_init()
 {
 	struct message *msg = malloc(sizeof *msg);
 	if (!msg) return NULL;
 
-	msg->buffer = malloc(256);
-	if (!msg->buffer) {
+	if (message_init(msg)) {
+		return msg;
+	} else {
 		free(msg);
 		return NULL;
 	}
-
-	msg->capacity = 256;
-	msg->size = 0;
-
-	return msg;
 }
 
 void message_free(struct message *msg)
@@ -502,13 +510,20 @@ void message_free(struct message *msg)
 	free(msg);
 }
 
-struct message *message_from_prefix_buffer(uint8_t *buffer)
+void message_reset(struct message *msg)
+{
+	insert_uint64(msg->buffer, 8);
+	msg->size = 8;
+}
+
+/* only use to read from */
+struct message *message_from_buffer(uint8_t *buffer)
 {
 	struct message *msg = malloc(sizeof *msg);
 	if (!msg) return NULL;
 
 	uint64_t size = decode_length(buffer);
-	msg->buffer = buffer + 8;
+	msg->buffer = buffer;
 	msg->size = size;
 	msg->capacity = size;
 
@@ -530,14 +545,16 @@ int message_append(struct message *msg, uint8_t *data, uint64_t size)
 
 	memcpy(msg->buffer + msg->size, data, size);
 	msg->size += size;
-	
+
+	insert_uint64(msg->buffer, msg->size);
+
 	return 0;
 }
 
 uint64_t message_get_count(struct message *msg)
 {
-	uint8_t *buffer = msg->buffer;
-	uint64_t remaining = msg->size;
+	uint8_t *buffer = msg->buffer + 8;
+	uint64_t remaining = msg->size - 8;
 	uint64_t count = 0;
 	while (remaining >= 8) {
 		uint64_t length = decode_length(buffer);
@@ -551,8 +568,8 @@ uint64_t message_get_count(struct message *msg)
 
 int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
 {
-	uint8_t *buffer = msg->buffer;
-	uint64_t remaining = msg->size;
+	uint8_t *buffer = msg->buffer + 8;
+	uint64_t remaining = msg->size - 8;
 	uint64_t count = 0;
 	while (remaining >= 8) {
 		uint64_t length = decode_length(buffer);
@@ -598,7 +615,7 @@ char *read_node_name_message(struct message *msg)
 
 int write_node_name_message(struct message *msg, char *node_name)
 {
-	msg->size = 0;
+	message_reset(msg);
 
 	int rc = message_append(msg, (uint8_t*) "node", 4); 
 	if (rc) return rc;
@@ -833,11 +850,56 @@ out:
 
 /* Replicator state */
 
-struct replicator_state {
+struct rstate {
 	char *node;
-	int socket_fd;
 	TRLMDB_env *env;
+	int socket_fd;
+	int connection_is_open;
+	char *remote_address;
+	int should_connect;
+	int node_message_sent;
+	int node_message_received;
+	char *remote_node;
+	uint8_t *read_buffer;
+	uint64_t read_buffer_capacity;
+	uint64_t read_buffer_size;
+	int read_buffer_loaded;
+	struct message write_msg;
+	int write_msg_loaded;
+	uint8_t time_of_write_cursor[20];
+	int end_of_write_loop;
+	int socket_readable;
+	int socket_writable;
 };
+
+struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
+{
+	struct rstate *rstate = calloc(1, sizeof *rstate);
+	if (!rstate) return NULL;
+
+	rstate->node = node;
+	rstate->env = env;
+	rstate->read_buffer_capacity = 10000; 
+	rstate->read_buffer = malloc(rstate->read_buffer_capacity);
+	if (!rstate->read_buffer) {
+		free(rstate);
+		return NULL;
+	}
+	
+	if (!message_init(&rstate->write_msg)) {
+		free(rstate->read_buffer);
+		free(rstate);
+	}
+	
+	return rstate;
+}
+
+void rstate_free(struct rstate *rstate)
+{
+	free(rstate->write_msg.buffer);
+	free(rstate->read_buffer);
+	free(rstate);
+}
 
 /* Network code */
 
@@ -898,7 +960,7 @@ int create_listener(const int ai_family, const char *hostname, const char *servn
 	return listen_fd;
 }
 
-void *replicator_connection_handler(void *replicator_state);
+void *replicator_loop(void *arg);
 
 void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 {
@@ -915,17 +977,15 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		printf("accepted = %d\n", accepted_fd);
 		if (accepted_fd == -1) continue;
 
-		struct replicator_state *replicator_state = malloc(sizeof replicator_state);
-		if (!replicator_state) continue;
-		replicator_state->node = node;
-		replicator_state->socket_fd = accepted_fd;
-		replicator_state->env = env;
+		struct rstate *rstate = rstate_alloc_init(node, env);
+		if(rstate) continue;
+		rstate->socket_fd = accepted_fd;
+		rstate->connection_is_open = 1;
 		
 		pthread_t thread;
-		if (pthread_create(&thread, &attr, replicator_connection_handler, replicator_state) != 0) {
-			printf("hello\n");
+		if (pthread_create(&thread, &attr, replicator_loop, rstate) != 0) {
 			close(accepted_fd);
-			free(replicator_state);
+			rstate_free(rstate);
 		}
 	}
 }
@@ -951,59 +1011,39 @@ void replicator(struct conf_info conf_info)
 	}
 }
 
-/* Length prefixed messages */
-
-struct lmessage {
-	struct message *msg;
-	uint8_t length_msg[8];
-	uint64_t written;
-	int done;
-};
-
-struct lmessage *lmessage_init(struct lmessage *lmsg, struct message *msg)
+ssize_t message_write_blocking(struct message *msg, int fd)
 {
-	lmsg->msg = msg;
-	insert_uint64(lmsg->length_msg, msg->size);
-	lmsg->written = 0;
-	lmsg->done = 0;
-	return lmsg;
-}
-
-ssize_t lmessage_write_blocking(struct lmessage *lmsg, int fd)
-{
-	while (lmsg->written < 8 + lmsg.msg.size) {
-		if (lmsg->written < 8) {
-			ssize_t written = write(fd, lmsg->length_msg + lmsg->written, 8 - lmsg->written);
-			lmsg->written += written;
-		} else {
-			ssize_t written = write(fd, lmsg->msg + lmsg->written - 8, lmsg->msg.size - lmsg->written + 8);
-			lmsg->written += written;
-		}
+	uint64_t nwritten = 0;
+	while (nwritten < msg->size) {
+		ssize_t written = write(fd, msg->buffer + nwritten, msg->size - nwritten);
+		if (written == -1) return -1;
+		nwritten += written;
+	}
+	return 0;
 }
 
 /* The replicator thread start routine */
 
-void *replicator_connection_handler(void *replicator_state)
+void *replicator_loop(void *arg)
 {
-	char *node = ((struct replicator_state*) replicator_state)->node;
-	int socket_fd = ((struct replicator_state*) replicator_state)->socket_fd;
-	TRLMDB_env *env = ((struct replicator_state*) replicator_state)->env;
-	free(replicator_state);
+	struct rstate *rstate = (struct rstate*) arg;
 
-	struct message msg;
 
-	int rc = write_node_name_message(&msg, node);
-	if (rc) goto close;
-
-	int nwritten = 0;
-	while (nwritten < msg.size) {
-		int nbytes = write(socket_fd, msg.buffer + nwritten, msg.size - nwritten);
-		nwritten += nbytes;
-	}
 	
-	sleep(1);
+/* 	struct message msg; */
 
-close:
-	close(socket_fd);
-	return NULL;
+/* 	int rc = write_node_name_message(&msg, node); */
+/* 	if (rc) goto close; */
+
+/* 	int nwritten = 0; */
+/* 	while (nwritten < msg.size) { */
+/* 		int nbytes = write(socket_fd, msg.buffer + nwritten, msg.size - nwritten); */
+/* 		nwritten += nbytes; */
+/* 	} */
+	
+/* 	sleep(1); */
+
+/* close: */
+/* 	close(socket_fd); */
+ 	return NULL;
 }
