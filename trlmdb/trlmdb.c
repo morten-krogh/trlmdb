@@ -877,6 +877,9 @@ struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
 	struct rstate *rstate = calloc(1, sizeof *rstate);
 	if (!rstate) return NULL;
 
+	struct rstate aszero = {0};
+	*rstate = aszero; // portable way of zeroing rstate
+	
 	rstate->node = node;
 	rstate->env = env;
 	rstate->read_buffer_capacity = 10000; 
@@ -1024,9 +1027,49 @@ ssize_t message_write_blocking(struct message *msg, int fd)
 
 /* The replicator thread start routine */
 
+void replicator_iteration(struct rstate *rstate);
+
 void *replicator_loop(void *arg)
 {
 	struct rstate *rstate = (struct rstate*) arg;
+
+	for (;;) {
+		if (!rstate->connection_is_open && !rstate->should_connect) return NULL;
+		replicator_iteration(rstate);
+	}
+}
+
+void replicator_iteration(struct rstate *rstate)
+{
+	if (rstate->read_buffer_loaded) {
+
+	} else {
+
+	}
+
+
+		
+/* struct rstate { */
+/* 	char *node; */
+/* 	TRLMDB_env *env; */
+/* 	int socket_fd; */
+/* 	int connection_is_open; */
+/* 	char *remote_address; */
+/* 	int should_connect; */
+/* 	int node_message_sent; */
+/* 	int node_message_received; */
+/* 	char *remote_node; */
+/* 	uint8_t *read_buffer; */
+/* 	uint64_t read_buffer_capacity; */
+/* 	uint64_t read_buffer_size; */
+/* 	int read_buffer_loaded; */
+/* 	struct message write_msg; */
+/* 	int write_msg_loaded; */
+/* 	uint8_t time_of_write_cursor[20]; */
+/* 	int end_of_write_loop; */
+/* 	int socket_readable; */
+/* 	int socket_writable; */
+/* }; */
 
 
 	
@@ -1045,5 +1088,5 @@ void *replicator_loop(void *arg)
 
 /* close: */
 /* 	close(socket_fd); */
- 	return NULL;
+
 }
