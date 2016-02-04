@@ -871,7 +871,8 @@ struct rstate {
 	TRLMDB_env *env;
 	int socket_fd;
 	int connection_is_open;
-	char *remote_address;
+	char *remote_hostname;
+	char *remote_servname;
 	int should_connect;
 	int node_msg_sent;
 	int node_msg_received;
@@ -924,9 +925,8 @@ void rstate_free(struct rstate *rstate)
 
 int create_listener(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
 {
-	struct addrinfo hints;
+	struct addrinfo hints = {0};
 
-	memset(&hints, 0, sizeof hints);
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = ai_family;
 	hints.ai_socktype = SOCK_STREAM;
@@ -997,16 +997,44 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		if (accepted_fd == -1) continue;
 
 		struct rstate *rstate = rstate_alloc_init(node, env);
-		if(rstate) continue;
+		if(!rstate) continue;
 		rstate->socket_fd = accepted_fd;
 		rstate->connection_is_open = 1;
 		
 		pthread_t thread;
 		if (pthread_create(&thread, &attr, replicator_loop, rstate) != 0) {
+			printf("error creating thread\n");
 			close(accepted_fd);
 			rstate_free(rstate);
 		}
 	}
+}
+
+int create_connection(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
+{
+	struct addrinfo hints = {0};
+
+	hints.ai_family = ai_family;
+	hints.ai_socktype = SOCK_STREAM;
+
+	struct addrinfo *res;
+	int rc;
+	
+	if ((rc = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(rc));
+		return -1;
+	}
+
+	int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (socket_fd == -1) return -1;
+	
+	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
+	if (rc == -1) {
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(rc));
+		return -1;
+	}
+
+	return 0;
 }
 
 /* The replicator server */
@@ -1041,10 +1069,9 @@ ssize_t message_write_blocking(struct message *msg, int fd)
 	return 0;
 }
 
-/* The replicator thread start routine */
-
 void replicator_iteration(struct rstate *rstate);
 
+/* The replicator thread start routine */
 void *replicator_loop(void *arg)
 {
 	struct rstate *rstate = (struct rstate*) arg;
@@ -1052,34 +1079,46 @@ void *replicator_loop(void *arg)
 	for (;;) {
 		if (!rstate->connection_is_open) {
 			close(rstate->socket_fd);
-			if (!rstate->should_connect) return NULL;
+			if (!rstate->should_connect) {
+				rstate_free(rstate);
+				return NULL;
+			}
 		}
 		replicator_iteration(rstate);
 	}
 }
 
-void connect_to_remote(struct rstate *rstate)
+void connect_to_remote(struct rstate *rs)
 {
+	int rc = create_connection(PF_INET, rs->remote_hostname, rs->remote_servname, NULL);
 
+	if (rc) {
+		sleep(100);
+		rs->connection_is_open = 0;
+	} else {
+		rs->connection_is_open = 1;
+	}
 }
 
-void send_node_msg(struct rstate *rstate)
+void send_node_msg(struct rstate *rs)
 {
-	struct message *msg = &rstate->write_msg;
+	struct message *msg = &rs->write_msg;
 	
-	int rc = write_node_name_msg(msg, rstate->node);
+	int rc = write_node_name_msg(msg, rs->node);
 	if (rc) return;
 
 	int nwritten = 0;
 	while (nwritten < msg->size) {
-		int nbytes = write(rstate->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
+		int nbytes = write(rs->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
 		if (nbytes > 0) {
 			nwritten += nbytes;
 		} else {
-			rstate->connection_is_open = 0;
+			rs->connection_is_open = 0;
 			return;
 		}
 	}
+
+	rs->node_msg_sent = 1;
 }
 
 void receive_node_msg(struct rstate *rs)
@@ -1113,6 +1152,8 @@ void receive_node_msg(struct rstate *rs)
 
 void replicator_iteration(struct rstate *rstate)
 {
+	printf("iteration\n");
+	
 	if (!rstate->connection_is_open) { 
 		connect_to_remote(rstate);
 	} else if (!rstate->node_msg_sent) {
