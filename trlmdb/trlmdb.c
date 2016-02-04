@@ -892,27 +892,27 @@ struct rstate {
 
 struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
 {
-	struct rstate *rstate = calloc(1, sizeof *rstate);
-	if (!rstate) return NULL;
+	struct rstate *rs = calloc(1, sizeof *rs);
+	if (!rs) return NULL;
 
 	struct rstate aszero = {0};
-	*rstate = aszero; // portable way of zeroing rstate
+	*rs = aszero; // portable way of zeroing rstate
 	
-	rstate->node = node;
-	rstate->env = env;
-	rstate->read_buffer_capacity = 10000; 
-	rstate->read_buffer = malloc(rstate->read_buffer_capacity);
-	if (!rstate->read_buffer) {
-		free(rstate);
+	rs->node = node;
+	rs->env = env;
+	rs->read_buffer_capacity = 10000; 
+	rs->read_buffer = malloc(rs->read_buffer_capacity);
+	if (!rs->read_buffer) {
+		free(rs);
 		return NULL;
 	}
 	
-	if (!message_init(&rstate->write_msg)) {
-		free(rstate->read_buffer);
-		free(rstate);
+	if (!message_init(&rs->write_msg)) {
+		free(rs->read_buffer);
+		free(rs);
 	}
 	
-	return rstate;
+	return rs;
 }
 
 void rstate_free(struct rstate *rs)
@@ -999,16 +999,16 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		printf("accepted = %d\n", accepted_fd);
 		if (accepted_fd == -1) continue;
 
-		struct rstate *rstate = rstate_alloc_init(node, env);
-		if(!rstate) continue;
-		rstate->socket_fd = accepted_fd;
-		rstate->connection_is_open = 1;
+		struct rstate *rs = rstate_alloc_init(node, env);
+		if(!rs) continue;
+		rs->socket_fd = accepted_fd;
+		rs->connection_is_open = 1;
 		
 		pthread_t thread;
-		if (pthread_create(&thread, &attr, replicator_loop, rstate) != 0) {
+		if (pthread_create(&thread, &attr, replicator_loop, rs) != 0) {
 			printf("error creating thread\n");
 			close(accepted_fd);
-			rstate_free(rstate);
+			rstate_free(rs);
 		}
 	}
 }
@@ -1106,22 +1106,22 @@ ssize_t message_write_blocking(struct message *msg, int fd)
 	return 0;
 }
 
-void replicator_iteration(struct rstate *rstate);
+void replicator_iteration(struct rstate *rs);
 
 /* The replicator thread start routine */
 void *replicator_loop(void *arg)
 {
-	struct rstate *rstate = (struct rstate*) arg;
+	struct rstate *rs = (struct rstate*) arg;
 
 	for (;;) {
-		if (!rstate->connection_is_open) {
-			close(rstate->socket_fd);
-			if (!rstate->should_connect) {
-				rstate_free(rstate);
+		if (!rs->connection_is_open) {
+			close(rs->socket_fd);
+			if (!rs->should_connect) {
+				rstate_free(rs);
 				return NULL;
 			}
 		}
-		replicator_iteration(rstate);
+		replicator_iteration(rs);
 	}
 }
 
@@ -1186,27 +1186,56 @@ void receive_node_msg(struct rstate *rs)
 	rs->remote_node = read_node_name_msg(msg);
 
 	if (!rs->remote_node) rs->connection_is_open = 0;
-
-	if (rs->remote_node) {
-		printf("remote = %s\n", rs->remote_node);
-	}
 }
 
-void replicator_iteration(struct rstate *rstate)
+void read_messages_from_buffer(struct rstate *rs)
+{
+
+}
+
+void read_from_socket(struct rstate *rs)
+{
+
+}
+
+void load_write_msg(struct rstate *rs)
+{
+
+}
+
+void write_to_socket(struct rstate *rs)
+{
+
+}
+
+void poll_socket(struct rstate *rs)
+{
+
+}
+
+void replicator_iteration(struct rstate *rs)
 {
 	printf("iteration\n");
 	
-	if (!rstate->connection_is_open) { 
-		connect_to_remote(rstate);
-	} else if (!rstate->node_msg_sent) {
-		send_node_msg(rstate);
-	} else if (!rstate->node_msg_received) {
-		receive_node_msg(rstate);
-	} else if (rstate->read_buffer_loaded) {
-
+	if (!rs->connection_is_open) { 
+		connect_to_remote(rs);
+	} else if (!rs->node_msg_sent) {
+		send_node_msg(rs);
+	} else if (!rs->node_msg_received) {
+		receive_node_msg(rs);
+	} else if (rs->read_buffer_loaded) {
+		read_messages_from_buffer(rs);
+	} else if (rs->socket_readable) {
+		read_from_socket(rs);
+	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop) {
+		load_write_msg(rs);
+	} else if (rs->write_msg_loaded && rs->socket_writable) {
+		write_to_socket(rs);
 	} else {
-
+		poll_socket(rs);
 	}
+
+	
 /* struct rstate { */
 /* 	char *node; */
 /* 	TRLMDB_env *env; */
