@@ -469,6 +469,7 @@ struct message {
 	uint8_t *buffer;
 	uint64_t size;
 	uint64_t capacity;
+	int owner;
 };
 
 static uint64_t decode_length(uint8_t *buffer)
@@ -487,6 +488,7 @@ struct message *message_init(struct message *msg)
 	msg->capacity = 256;
 	insert_uint64(msg->buffer, 8);
 	msg->size = 8;
+	msg->owner = 1;
 
 	return msg;
 }
@@ -506,7 +508,7 @@ struct message *message_alloc_init()
 
 void message_free(struct message *msg)
 {
-	free(msg->buffer);
+	if (msg->owner) free(msg->buffer);
 	free(msg);
 }
 
@@ -517,15 +519,29 @@ void message_reset(struct message *msg)
 }
 
 /* only use to read from */
-struct message *message_from_buffer(uint8_t *buffer)
+struct message *message_from_buffer(uint8_t *buffer, uint64_t buffer_size, int owner)
 {
+	if (buffer_size < 8) return NULL;
+	uint64_t size = decode_length(buffer);
+	if (buffer_size < size) return NULL;
+
 	struct message *msg = malloc(sizeof *msg);
 	if (!msg) return NULL;
 
-	uint64_t size = decode_length(buffer);
-	msg->buffer = buffer;
 	msg->size = size;
 	msg->capacity = size;
+	msg->owner = owner;
+
+	if (owner) {
+		msg->buffer = malloc(size);
+		if (!msg->buffer) {
+			free(msg);
+			return NULL;
+		}
+		memcpy(msg->buffer, buffer, size);
+	} else {
+		msg->buffer = buffer;
+	}
 
 	return msg;
 }
@@ -588,7 +604,7 @@ int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64
 
 /* node name message */
 
-char *read_node_name_message(struct message *msg)
+char * read_node_name_msg(struct message *msg)
 {
 	uint64_t count = message_get_count(msg);
 	if (count != 2) return NULL;
@@ -613,7 +629,7 @@ char *read_node_name_message(struct message *msg)
 	return node_name;
 }
 
-int write_node_name_message(struct message *msg, char *node_name)
+int write_node_name_msg(struct message *msg, char *node_name)
 {
 	message_reset(msg);
 
@@ -627,7 +643,7 @@ int write_node_name_message(struct message *msg, char *node_name)
 
 /* time message */
 
-int read_time_message(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
+int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 {
 	uint64_t count = message_get_count(msg);
 	if (count < 3 || count > 5) return 1;
@@ -857,8 +873,8 @@ struct rstate {
 	int connection_is_open;
 	char *remote_address;
 	int should_connect;
-	int node_message_sent;
-	int node_message_received;
+	int node_msg_sent;
+	int node_msg_received;
 	char *remote_node;
 	uint8_t *read_buffer;
 	uint64_t read_buffer_capacity;
@@ -1034,21 +1050,80 @@ void *replicator_loop(void *arg)
 	struct rstate *rstate = (struct rstate*) arg;
 
 	for (;;) {
-		if (!rstate->connection_is_open && !rstate->should_connect) return NULL;
+		if (!rstate->connection_is_open) {
+			close(rstate->socket_fd);
+			if (!rstate->should_connect) return NULL;
+		}
 		replicator_iteration(rstate);
 	}
 }
 
+void connect_to_remote(struct rstate *rstate)
+{
+
+}
+
+void send_node_msg(struct rstate *rstate)
+{
+	struct message *msg = &rstate->write_msg;
+	
+	int rc = write_node_name_msg(msg, rstate->node);
+	if (rc) return;
+
+	int nwritten = 0;
+	while (nwritten < msg->size) {
+		int nbytes = write(rstate->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
+		if (nbytes > 0) {
+			nwritten += nbytes;
+		} else {
+			rstate->connection_is_open = 0;
+			return;
+		}
+	}
+}
+
+void receive_node_msg(struct rstate *rs)
+{
+	struct message *msg = NULL;
+
+	while (!msg) {
+		if (rs->read_buffer_size == rs->read_buffer_capacity) {
+			uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
+			if (!realloced) {
+				rs->connection_is_open = 0;
+				return;
+			}
+			rs->read_buffer = realloced;
+			rs->read_buffer_capacity *= 2;
+		}
+		int nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
+		if (nread == -1) {
+			rs->connection_is_open = 0;
+			return;
+		}
+		rs->read_buffer_size += nread;
+
+		msg = message_from_buffer(rs->read_buffer, rs->read_buffer_size, 0);
+	}
+
+	rs->remote_node = read_node_name_msg(msg);
+
+	if (!rs->remote_node) rs->connection_is_open = 0;
+}
+
 void replicator_iteration(struct rstate *rstate)
 {
-	if (rstate->read_buffer_loaded) {
+	if (!rstate->connection_is_open) { 
+		connect_to_remote(rstate);
+	} else if (!rstate->node_msg_sent) {
+		send_node_msg(rstate);
+	} else if (!rstate->node_msg_received) {
+		receive_node_msg(rstate);
+	} else if (rstate->read_buffer_loaded) {
 
 	} else {
 
 	}
-
-
-		
 /* struct rstate { */
 /* 	char *node; */
 /* 	TRLMDB_env *env; */
@@ -1072,17 +1147,6 @@ void replicator_iteration(struct rstate *rstate)
 /* }; */
 
 
-	
-/* 	struct message msg; */
-
-/* 	int rc = write_node_name_message(&msg, node); */
-/* 	if (rc) goto close; */
-
-/* 	int nwritten = 0; */
-/* 	while (nwritten < msg.size) { */
-/* 		int nbytes = write(socket_fd, msg.buffer + nwritten, msg.size - nwritten); */
-/* 		nwritten += nbytes; */
-/* 	} */
 	
 /* 	sleep(1); */
 
