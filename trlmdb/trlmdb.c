@@ -833,6 +833,7 @@ struct conf_info parse_conf_file(const char *conf_file, char **err)
 			conf_info.nremote++;
 			/* Allocation should not fail this early */ 
 			conf_info.remote = realloc(conf_info.remote, conf_info.nremote);
+			conf_info.remote[conf_info.nremote - 1] = strdup(right);
 		}
 	}
 
@@ -914,11 +915,13 @@ struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
 	return rstate;
 }
 
-void rstate_free(struct rstate *rstate)
+void rstate_free(struct rstate *rs)
 {
-	free(rstate->write_msg.buffer);
-	free(rstate->read_buffer);
-	free(rstate);
+	free(rs->remote_hostname);
+	free(rs->remote_servname);
+	free(rs->write_msg.buffer);
+	free(rs->read_buffer);
+	free(rs);
 }
 
 /* Network code */
@@ -1014,6 +1017,7 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 {
 	struct addrinfo hints = {0};
 
+	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = ai_family;
 	hints.ai_socktype = SOCK_STREAM;
 
@@ -1030,10 +1034,12 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 	
 	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
 	if (rc == -1) {
-		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(rc));
+		fprintf(stderr, "connect error to %s:%s. Trying again later\n", hostname, servname);
 		return -1;
 	}
 
+	printf("connected to %s:%s\n", hostname, servname);
+	
 	return 0;
 }
 
@@ -1050,12 +1056,43 @@ void replicator(struct conf_info conf_info)
 	rc = trlmdb_env_open(env, conf_info.path, 0, 0644);
 	if (rc) print_error_and_exit("The database could not be opened");
 
+	for (int i = 0; i < conf_info.nremote; i++) {
 
+		char *address = conf_info.remote[i];
+		
+		struct rstate *rs = rstate_alloc_init(conf_info.node, env);
+		if (!rs) print_error_and_exit("The system is out of memory");
+
+		rs->should_connect = 1;
+		
+		char *semicolon = strchr(address, ':');
+
+		if (semicolon) {
+			rs->remote_hostname = strndup(address, semicolon - address);
+			rs->remote_servname = strndup(semicolon + 1, address + strlen(address) - semicolon - 1);
+		} else {
+			rs->remote_hostname = strdup(address);
+			rs->remote_servname = strdup("80");
+		}
+
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+		pthread_t thread;
+
+		if (pthread_create(&thread, &attr, replicator_loop, rs) != 0) {
+			printf("error creating thread\n");
+			rstate_free(rs);
+		}
+	}
 	
 	if (conf_info.port) {
 		int listen_fd = create_listener(PF_INET, "localhost", conf_info.port, NULL);
 		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info.node);
 	}
+
+	for (;;);
 }
 
 ssize_t message_write_blocking(struct message *msg, int fd)
@@ -1137,7 +1174,7 @@ void receive_node_msg(struct rstate *rs)
 		}
 		int nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
 		printf("nread = %d\n", nread);
-		if (nread == -1) {
+		if (nread < 1) {
 			rs->connection_is_open = 0;
 			return;
 		}
@@ -1149,6 +1186,10 @@ void receive_node_msg(struct rstate *rs)
 	rs->remote_node = read_node_name_msg(msg);
 
 	if (!rs->remote_node) rs->connection_is_open = 0;
+
+	if (rs->remote_node) {
+		printf("remote = %s\n", rs->remote_node);
+	}
 }
 
 void replicator_iteration(struct rstate *rstate)
