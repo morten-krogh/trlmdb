@@ -910,7 +910,7 @@ struct rstate {
 	struct message write_msg;
 	uint64_t write_msg_nwritten;
 	int write_msg_loaded;
-	uint8_t time_of_write_cursor[20];
+	uint8_t write_time[20];
 	int end_of_write_loop;
 	int socket_readable;
 	int socket_writable;
@@ -1253,11 +1253,19 @@ void read_from_socket(struct rstate *rs)
 
 void load_write_msg(struct rstate *rs)
 {
+	TRLMDB_txn *txn;
+	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
+	if (rc) return;
 
-	
+	rc = write_time_message(txn, rs->write_time, rs->remote_node, &rs->write_msg);
 
-
-	
+	if (rc == 0) {
+		rs->write_msg_loaded = 1;
+	} else if (rc == MDB_NOTFOUND) {
+		rs->write_msg_loaded = 0;
+		rs->end_of_write_loop = 1;
+		memset(rs->write_time, 0, 20);
+	}
 }
 
 void write_to_socket(struct rstate *rs)
