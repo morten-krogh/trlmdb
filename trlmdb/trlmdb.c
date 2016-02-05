@@ -1074,7 +1074,6 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		printf("accepted = %d\n", accepted_fd);
 		if (accepted_fd == -1) continue;
 
-		printf("hello accept\n");
 		int on = 1;
 		int rc = setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 		
@@ -1368,9 +1367,14 @@ void poll_socket(struct rstate *rs)
 	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
-	pollfd.events = POLLRDNORM | POLLWRNORM;
+	if (rs->write_msg_loaded) {
+		pollfd.events = POLLRDNORM | POLLWRNORM;
+	} else {
+		pollfd.events = POLLRDNORM;
+	}
 	int rc = poll(&pollfd, 1, timeout);
 	if (rc == 0) {
+		printf("POLL timeout\n");
 		rs->end_of_write_loop = 0;
 	} else if (rc == 1) {
 		if (pollfd.revents & (POLLHUP | POLLNVAL)) {
@@ -1384,7 +1388,7 @@ void poll_socket(struct rstate *rs)
 			rs->socket_readable = 1;
 		}
 		if (pollfd.revents & POLLWRNORM) {
-			printf("POLWRDNORM\n");
+			printf("POLWRNORM\n");
 			rs->socket_writable = 1;
 		}
 	}
@@ -1392,10 +1396,7 @@ void poll_socket(struct rstate *rs)
 
 void replicator_iteration(struct rstate *rs)
 {
-	sleep(5);
-	printf("\n\n\nIteration\n\n");
-	print_rstate(rs);
-	printf("\n");
+	printf("\n\n\nIteration\n");
 	
 	if (!rs->connection_is_open) {
 		printf("connect to remote\n");
@@ -1422,4 +1423,9 @@ void replicator_iteration(struct rstate *rs)
 		printf("Poll\n");
 		poll_socket(rs);
 	}
+
+	printf("\n");
+	print_rstate(rs);
+
+	sleep(15);
 }
