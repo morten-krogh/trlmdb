@@ -516,7 +516,7 @@ void message_reset(struct message *msg)
 	msg->size = 8;
 }
 
-/* only use to read from */
+/* only use the returned msg for reading if owner is false */
 struct message *message_from_buffer(uint8_t *buffer, uint64_t buffer_size, int owner)
 {
 	if (buffer_size < 8) return NULL;
@@ -658,8 +658,8 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	rc = message_get_elem(msg, 1, &flag, &size);
 	if (rc) return 1;
 	if (size != 2) return 1;
-	if (flag[0] != 'f' && flag[0] != 'f') return 1;
-	if (flag[1] != 'f' && flag[1] != 'f') return 1;
+	if (flag[0] != 't' && flag[0] != 'f') return 1;
+	if (flag[1] != 't' && flag[1] != 'f') return 1;
 	
 	uint8_t *time;
 	
@@ -1191,7 +1191,25 @@ void receive_node_msg(struct rstate *rs)
 
 void read_messages_from_buffer(struct rstate *rs)
 {
-	
+	struct message *msg;
+	uint64_t msg_index = 0;
+
+	TRLMDB_txn *txn;
+	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
+	if (rc) return;
+
+	while (msg_index < rs->read_buffer_size && ((msg = message_from_buffer(rs->read_buffer + msg_index, rs->read_buffer_size - msg_index, 0)) != NULL)) {
+		int rc = read_time_msg(txn, rs->remote_node, msg);
+		msg_index += msg->size;
+	}
+
+	trlmdb_txn_commit(txn);
+
+	if (msg_index > 0) {
+		memmove(rs->read_buffer, rs->read_buffer + msg_index, rs->read_buffer_size - msg_index);
+		rs->read_buffer_size -= msg_index;
+	}
+	rs->read_buffer_loaded = 0;
 }
 
 void read_from_socket(struct rstate *rs)
