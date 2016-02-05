@@ -67,6 +67,15 @@ void print_mdb_error_and_exit(int rc)
 	exit(rc);
 }
 
+void print_buffer(uint8_t *buffer, uint64_t size)
+{
+	printf("size = %llu\n", size);
+	for (uint64_t i = 0; i < size; i++) {
+		printf("%02x", *(uint8_t *)(buffer + i));
+	}
+	printf("\n");
+}
+
 static void insert_uint32(uint8_t *dst, const uint32_t src)
 {
 	uint32_t be = htonl(src);
@@ -600,6 +609,19 @@ int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64
 	return 1;
 }
 
+void print_message(struct message *msg)
+{
+	uint64_t count = message_get_count(msg);
+	printf("count = %llu\n", count);
+	for (uint64_t i = 0; i < count; i++) {
+		uint8_t *data;
+		uint64_t size;
+		message_get_elem(msg, i, &data, &size);
+		printf("index = %llu\n", i);
+		print_buffer(data, size);
+	}
+}
+
 /* node name message */
 
 char * read_node_name_msg(struct message *msg)
@@ -950,6 +972,33 @@ void rstate_free(struct rstate *rs)
 	free(rs);
 }
 
+void print_rstate(struct rstate *rs)
+{
+	printf("node = %s\n", rs->node);
+	printf("socket_fd = %d\n", rs->socket_fd);
+	printf("connection_is_open = %d\n", rs->connection_is_open);
+	printf("remote_hostname = %s\n", rs->remote_hostname);
+	printf("remote_servname = %s\n", rs->remote_servname);
+	printf("should_connect = %d\n", rs->should_connect);
+	printf("node_msg_sent = %d\n", rs->node_msg_sent);
+	printf("node_msg_received = %d\n", rs->node_msg_received);
+	printf("should_connect = %d\n", rs->should_connect);
+	printf("remote_node = %s\n", rs->remote_node);
+	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
+	print_buffer(rs->read_buffer, rs->read_buffer_size);
+	printf("read_buffer_capacity = %llu\n", rs->read_buffer_capacity);
+	printf("read_buffer_loaded = %d\n", rs->read_buffer_loaded);
+	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
+	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
+	printf("write_msg\n");
+	print_message(&rs->write_msg);
+	printf("write_time\n");
+	print_buffer(rs->write_time, 20);
+	printf("end_of_write_loop = %d\n", rs->end_of_write_loop);
+	printf("socket_readable = %d\n", rs->socket_readable);
+	printf("socket_writable = %d\n", rs->socket_writable);
+}
+
 /* Network code */
 
 int create_listener(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
@@ -1082,6 +1131,11 @@ void replicator(struct conf_info conf_info)
 	rc = trlmdb_env_open(env, conf_info.path, 0, 0644);
 	if (rc) print_error_and_exit("The database could not be opened");
 
+	pthread_t *threads;
+	if (conf_info.nremote > 0) {
+		threads = calloc(conf_info.nremote, sizeof threads);
+	}
+		
 	for (int i = 0; i < conf_info.nremote; i++) {
 
 		char *address = conf_info.remote[i];
@@ -1103,14 +1157,15 @@ void replicator(struct conf_info conf_info)
 
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
-		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
 		pthread_t thread;
 
 		if (pthread_create(&thread, &attr, replicator_loop, rs) != 0) {
 			printf("error creating thread\n");
 			rstate_free(rs);
+			exit(1);
 		}
+
+		threads[i] = thread;
 	}
 	
 	if (conf_info.port) {
@@ -1118,7 +1173,9 @@ void replicator(struct conf_info conf_info)
 		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info.node);
 	}
 
-	for (;;);
+	for (int i = 0; i < conf_info.nremote; i++) {
+		pthread_join(threads[i], NULL);
+	}
 }
 
 void replicator_iteration(struct rstate *rs);
@@ -1201,7 +1258,8 @@ void receive_node_msg(struct rstate *rs)
 	rs->read_buffer_size -= msg->size;
        	
 	rs->remote_node = read_node_name_msg(msg);
-
+	rs->node_msg_received = 1;
+	
 	if (!rs->remote_node) rs->connection_is_open = 0;
 }
 
@@ -1317,7 +1375,9 @@ void poll_socket(struct rstate *rs)
 
 void replicator_iteration(struct rstate *rs)
 {
-	printf("iteration\n");
+	printf("\nIteration\n\n");
+	print_rstate(rs);
+	sleep(10);
 	
 	if (!rs->connection_is_open) { 
 		connect_to_remote(rs);
@@ -1334,37 +1394,7 @@ void replicator_iteration(struct rstate *rs)
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
 		write_to_socket(rs);
 	} else {
+		printf("poll\n");
 		poll_socket(rs);
 	}
-
-	
-/* struct rstate { */
-/* 	char *node; */
-/* 	TRLMDB_env *env; */
-/* 	int socket_fd; */
-/* 	int connection_is_open; */
-/* 	char *remote_address; */
-/* 	int should_connect; */
-/* 	int node_message_sent; */
-/* 	int node_message_received; */
-/* 	char *remote_node; */
-/* 	uint8_t *read_buffer; */
-/* 	uint64_t read_buffer_capacity; */
-/* 	uint64_t read_buffer_size; */
-/* 	int read_buffer_loaded; */
-/* 	struct message write_msg; */
-/* 	int write_msg_loaded; */
-/* 	uint8_t time_of_write_cursor[20]; */
-/* 	int end_of_write_loop; */
-/* 	int socket_readable; */
-/* 	int socket_writable; */
-/* }; */
-
-
-	
-/* 	sleep(1); */
-
-/* close: */
-/* 	close(socket_fd); */
-
 }
