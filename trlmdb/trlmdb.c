@@ -694,24 +694,48 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	return trlmdb_node_time_update(txn, remote_node_name, time, flag);	
 }
 
-int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int should_reset_cursor, struct message *msg)
+/* returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
+int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
-	MDB_val node_time_val;
-	MDB_val flag_val;
-	int rc;
+	size_t node_len = strlen(node);
 	
-	if (should_reset_cursor) {
-		node_time_val.mv_size = strlen(node_name);
-		node_time_val.mv_data = node_name;
-		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
-	} else {
-		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
+	uint8_t *node_time = malloc(node_len + 20);
+	if (!node_time) return ENOMEM;
+	memcpy(node_time, node, node_len);
+	memcpy(node_time + node_len, time, 20);
+	MDB_val node_time_val = {node_len + 20, node_time};
+	
+	MDB_cursor *cursor;
+	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_node_time, &cursor);
+	if (rc) {
+		free(node_time);
+		return rc;
 	}
-	if (rc) return rc;	
+	
+	MDB_val flag_val;
+	rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
+	if (rc) {
+		free(node_time);
+		return rc;
+	}
 
-	uint8_t *time = node_time_val.mv_data + (node_time_val.mv_size - 20);
+	if (node_time_val.mv_size == node_len + 20 && memcmp(node_time_val.mv_data, node_time, node_len + 20) == 0) {
+		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
+		if (rc) {
+			free(node_time);
+			return rc;
+		}
+	}
+
+	free(node_time);
+	mdb_cursor_close(cursor);
+	
+	if (node_time_val.mv_size != node_len + 20 || memcmp(node_time_val.mv_data, node, node_len) != 0) return MDB_NOTFOUND;
+
+	memcpy(time, node_time_val.mv_data + node_len, 20);
+
 	MDB_val time_val = {20, time};
-
+	
 	MDB_val key;
 	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, &key);
 
@@ -719,9 +743,9 @@ int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int
 	out_flag[0] = key_known ? 't' : 'f';
 	out_flag[1] = *(uint8_t*)flag_val.mv_data;
 
-	msg->size = 0;
+	message_reset(msg);
 
-	rc = message_append(msg, (uint8_t*) "time", 4); 
+	rc = message_append(msg, (uint8_t*) "time", 4);
 	if (rc) return rc;
 
 	rc = message_append(msg, out_flag, 2);
@@ -730,20 +754,23 @@ int write_time_message(TRLMDB_txn *txn, MDB_cursor *cursor, char *node_name, int
 	rc = message_append(msg, time, 20);
 	if (rc) return rc;
 
-	if (out_flag[1] == 't' || !key_known) return 0;
-
-	rc = message_append(msg, (uint8_t*)key.mv_data, key.mv_size);
-	if (rc) return rc;
+	if (out_flag[1] == 'f' && key_known) {
+		rc = message_append(msg, (uint8_t*)key.mv_data, key.mv_size);
+		if (rc) return rc;
 	
-	if (!trlmdb_is_put_op(time)) return 0;
+		if (trlmdb_is_put_op(time)) {
+			MDB_val data;
+			rc = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, &data);
+			if (rc) return rc;
+			rc = message_append(msg, (uint8_t*)data.mv_data, data.mv_size);
+		}
+	}
 
-	MDB_val data;
-	rc = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, &data);
-	if (rc) return rc;
-	
-	rc = message_append(msg, (uint8_t*)data.mv_data, data.mv_size);
+	if (out_flag[0] == 't' && out_flag[1] == 't') {
+		mdb_del(txn->mdb_txn, txn->env->dbi_node_time, &node_time_val, NULL); 
+	}
 
-	return rc;
+	return 0;
 }
 
 /*
@@ -1094,17 +1121,6 @@ void replicator(struct conf_info conf_info)
 	for (;;);
 }
 
-ssize_t message_write_blocking(struct message *msg, int fd)
-{
-	uint64_t nwritten = 0;
-	while (nwritten < msg->size) {
-		ssize_t written = write(fd, msg->buffer + nwritten, msg->size - nwritten);
-		if (written == -1) return -1;
-		nwritten += written;
-	}
-	return 0;
-}
-
 void replicator_iteration(struct rstate *rs);
 
 /* The replicator thread start routine */
@@ -1143,9 +1159,9 @@ void send_node_msg(struct rstate *rs)
 	int rc = write_node_name_msg(msg, rs->node);
 	if (rc) return;
 
-	int nwritten = 0;
+	uint64_t nwritten = 0;
 	while (nwritten < msg->size) {
-		int nbytes = write(rs->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
+		ssize_t nbytes = write(rs->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
 		if (nbytes > 0) {
 			nwritten += nbytes;
 		} else {
@@ -1238,11 +1254,15 @@ void read_from_socket(struct rstate *rs)
 void load_write_msg(struct rstate *rs)
 {
 
+	
+
+
+	
 }
 
 void write_to_socket(struct rstate *rs)
 {
-	size_t nwritten = write(rs->socket_fd, rs->write_msg.buffer, rs->write_msg.size - rs->write_msg_nwritten);
+	ssize_t nwritten = write(rs->socket_fd, rs->write_msg.buffer, rs->write_msg.size - rs->write_msg_nwritten);
 	if (nwritten < 1) {
 		rs->connection_is_open = 0;
 		return;
