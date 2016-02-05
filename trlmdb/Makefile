@@ -14,6 +14,9 @@ trlmdb.o: trlmdb.h trlmdb.c
 replicator: replicator.c trlmdb.c midl.o mdb.o
 	cc -O0 midl.o mdb.o replicator.c -o replicator
 
+test_db: test_db.c trlmdb.c
+	cc -O0 midl.o mdb.o test_db.c -o test_db
+
 test: test.c trlmdb.c mdb.o midl.o
 	cc -O0 midl.o mdb.o test.c -o test
 
