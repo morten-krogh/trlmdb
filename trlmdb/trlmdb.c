@@ -1074,6 +1074,10 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		printf("accepted = %d\n", accepted_fd);
 		if (accepted_fd == -1) continue;
 
+		printf("hello accept\n");
+		int on = 1;
+		int rc = setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+		
 		struct rstate *rs = rstate_alloc_init(node, env);
 		if(!rs) continue;
 		rs->socket_fd = accepted_fd;
@@ -1106,6 +1110,9 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 
 	int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (socket_fd == -1) return -1;
+
+	int on = 1;
+	rc = setsockopt(socket_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 	
 	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
 	if (rc == -1) {
@@ -1190,6 +1197,7 @@ void *replicator_loop(void *arg)
 			close(rs->socket_fd);
 			if (!rs->should_connect) {
 				rstate_free(rs);
+				printf("Terminate thread\n");
 				return NULL;
 			}
 		}
@@ -1199,6 +1207,9 @@ void *replicator_loop(void *arg)
 
 void connect_to_remote(struct rstate *rs)
 {
+	rs->node_msg_sent = 0;
+	rs->node_msg_received = 0;
+	
 	int rc = create_connection(PF_INET, rs->remote_hostname, rs->remote_servname, NULL);
 
 	if (rc) {
@@ -1228,6 +1239,7 @@ void send_node_msg(struct rstate *rs)
 	}
 
 	rs->node_msg_sent = 1;
+	message_reset(&rs->write_msg);
 }
 
 void receive_node_msg(struct rstate *rs)
@@ -1317,6 +1329,9 @@ void load_write_msg(struct rstate *rs)
 
 	rc = write_time_message(txn, rs->write_time, rs->remote_node, &rs->write_msg);
 
+	printf("load_write_msg rc = %d\n", rc); 
+	if (rc) print_mdb_error(rc);
+	
 	if (rc == 0) {
 		rs->write_msg_loaded = 1;
 	} else if (rc == MDB_NOTFOUND) {
@@ -1324,6 +1339,8 @@ void load_write_msg(struct rstate *rs)
 		rs->end_of_write_loop = 1;
 		memset(rs->write_time, 0, 20);
 	}
+
+	trlmdb_txn_commit(txn);
 }
 
 void write_to_socket(struct rstate *rs)
@@ -1356,17 +1373,17 @@ void poll_socket(struct rstate *rs)
 	if (rc == 0) {
 		rs->end_of_write_loop = 0;
 	} else if (rc == 1) {
-		if (pollfd.revents | (POLLHUP & POLLNVAL)) {
+		if (pollfd.revents & (POLLHUP | POLLNVAL)) {
 			printf("POLLHUP\n");
 			rs->connection_is_open = 0;
 			return;
 		}
-		if (pollfd.revents | POLLRDNORM) {
+		if (pollfd.revents & POLLRDNORM) {
 			printf("POLLRDNORM\n");
 			rs->end_of_write_loop = 0;
 			rs->socket_readable = 1;
 		}
-		if (pollfd.revents | POLLWRNORM) {
+		if (pollfd.revents & POLLWRNORM) {
 			printf("POLWRDNORM\n");
 			rs->socket_writable = 1;
 		}
@@ -1375,26 +1392,34 @@ void poll_socket(struct rstate *rs)
 
 void replicator_iteration(struct rstate *rs)
 {
-	printf("\nIteration\n\n");
+	sleep(5);
+	printf("\n\n\nIteration\n\n");
 	print_rstate(rs);
-	sleep(10);
+	printf("\n");
 	
-	if (!rs->connection_is_open) { 
+	if (!rs->connection_is_open) {
+		printf("connect to remote\n");
 		connect_to_remote(rs);
 	} else if (!rs->node_msg_sent) {
+		printf("send_node_msg\n");
 		send_node_msg(rs);
 	} else if (!rs->node_msg_received) {
+		printf("receive_node_msg\n");
 		receive_node_msg(rs);
 	} else if (rs->read_buffer_loaded) {
+		printf("Read messages from buffer\n");
 		read_messages_from_buffer(rs);
 	} else if (rs->socket_readable) {
+		printf("Read from socket\n");
 		read_from_socket(rs);
 	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop) {
+		printf("Load write msg\n");
 		load_write_msg(rs);
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
+		printf("Write to socket\n");
 		write_to_socket(rs);
 	} else {
-		printf("poll\n");
+		printf("Poll\n");
 		poll_socket(rs);
 	}
 }
