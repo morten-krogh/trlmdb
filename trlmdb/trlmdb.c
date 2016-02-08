@@ -983,6 +983,7 @@ struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
 	
 	rs->node = conf_info->node;
 	rs->env = env;
+	rs->socket_fd = -1;
 	rs->naccept = conf_info->naccept;
 	rs->accept_node = conf_info->accept_node;
 	rs->read_buffer_capacity = 10000; 
@@ -1002,6 +1003,7 @@ struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
 
 void rstate_free(struct rstate *rs)
 {
+	printf("rstate_free\n");
 	free(rs->connect_node);
 	free(rs->connect_hostname);
 	free(rs->connect_servname);
@@ -1151,20 +1153,26 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 	}
 
 	int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (socket_fd == -1) return -1;
+	if (socket_fd == -1) {
+		freeaddrinfo(res);
+		return -1;
+	}
 
 	int on = 1;
 	rc = setsockopt(socket_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 	
 	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
 	if (rc == -1) {
+		freeaddrinfo(res);
 		fprintf(stderr, "connect error to %s:%s. Trying again later\n", hostname, servname);
 		return -1;
 	}
 
 	printf("connected to %s:%s\n", hostname, servname);
+
+	freeaddrinfo(res);
 	
-	return 0;
+	return socket_fd;
 }
 
 /* The replicator server */
@@ -1255,7 +1263,11 @@ void *replicator_loop(void *arg)
 
 	for (;;) {
 		if (!rs->connection_is_open) {
-			close(rs->socket_fd);
+			printf("rs->socket_fd = %d\n", rs->socket_fd);
+			if (rs->socket_fd != -1) {
+				close(rs->socket_fd);
+				rs->socket_fd = -1;
+			}
 			if (!rs->connect_node || (rs->node_msg_received && !rs->remote_node)) {
 				rstate_free(rs);
 				printf("Terminate thread\n");
@@ -1271,12 +1283,16 @@ void connect_to_remote(struct rstate *rs)
 	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
 	
-	int rc = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
-
-	if (rc) {
+	int socket_fd = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
+	printf("socket_fd = %d\n", socket_fd); 
+	sleep(2);
+	
+	if (socket_fd == -1) {
 		sleep(100);
+		rs->socket_fd = 0;
 		rs->connection_is_open = 0;
 	} else {
+		rs->socket_fd = socket_fd;
 		rs->connection_is_open = 1;
 	}
 }
@@ -1332,6 +1348,12 @@ void receive_node_msg(struct rstate *rs)
 
 	char *remote_node = read_node_name_msg(msg);
 
+	
+	printf("hello\n");
+	print_message(msg);
+	printf("%s\n", remote_node);
+	printf("hello\n");
+	
 	int acceptable = 0;
 	if (rs->connect_node) {
 		if (rs->connect_node && strcmp(rs->connect_node, remote_node) == 0) acceptable = 1;
@@ -1344,6 +1366,8 @@ void receive_node_msg(struct rstate *rs)
 		}
 	}
 
+	printf("hello\n");
+	
 	rs->node_msg_received = 1;
 	
 	if (acceptable) {
@@ -1410,7 +1434,6 @@ void load_write_msg(struct rstate *rs)
 
 	rc = write_time_message(txn, rs->write_time, rs->remote_node, &rs->write_msg);
 
-	printf("load_write_msg rc = %d\n", rc); 
 	if (rc) print_mdb_error(rc);
 	
 	if (rc == 0) {
@@ -1445,7 +1468,7 @@ void write_to_socket(struct rstate *rs)
 
 void poll_socket(struct rstate *rs)
 {
-	int timeout = 1000000;
+	int timeout = 1;
 	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
@@ -1479,6 +1502,7 @@ void poll_socket(struct rstate *rs)
 void replicator_iteration(struct rstate *rs)
 {
 	printf("\n\n\nIteration\n");
+	print_rstate(rs);
 	
 	if (!rs->connection_is_open) {
 		printf("connect to remote\n");
@@ -1506,8 +1530,5 @@ void replicator_iteration(struct rstate *rs)
 		poll_socket(rs);
 	}
 
-	printf("\n");
-	print_rstate(rs);
-
-	/* sleep(2); */
+	sleep(1);
 }

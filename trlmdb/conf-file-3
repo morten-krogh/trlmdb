@@ -1,0 +1,4 @@
+node = node-3
+database = trlmdb-3
+connect = node-1 localhost:8001
+//connect = node-2 localhost:8002

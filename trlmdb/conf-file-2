@@ -1,3 +1,4 @@
 node = node-2
 database = trlmdb-2
-connect = node-1 localhost:8000
+port = 8002
+accept = node-3
