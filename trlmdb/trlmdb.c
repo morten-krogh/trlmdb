@@ -689,7 +689,7 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	uint8_t *data;
 	uint64_t size;
 	
-	int rc = message_get_elem(msg, 0, &data, & size);
+	int rc = message_get_elem(msg, 0, &data, &size);
 	if (rc) return 1;
 
 	if (size != 4 || memcmp(data, "time", 4) != 0) return 1;
@@ -703,14 +703,14 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	
 	uint8_t *time;
 	
-	rc = message_get_elem(msg, 2, &time, & size);
+	rc = message_get_elem(msg, 2, &time, &size);
 	if (rc || size != 20) return 1;
 
 	int is_put = trlmdb_is_put_op(time);
 	
 	MDB_val key;
 	int key_absent = trlmdb_get_key(txn, time, &key);
-
+	
 	if (key_absent && count > 3) {
 		uint8_t *key;
 		uint64_t key_size;
@@ -725,7 +725,8 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 			rc = message_get_elem(msg, 4, &data, &data_size); 
 			if (rc) return 1;
 			MDB_val data_val = {data_size, data};
-			trlmdb_put(txn, &key_val, &data_val);
+			//trlmdb_put(txn, &key_val, &data_val);
+			trlmdb_insert_time_key_data(txn, time, &key_val, &data_val);
 		} else {
 			trlmdb_del(txn, &key_val);
 		}
@@ -777,7 +778,7 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 	MDB_val time_val = {20, time};
 	
 	MDB_val key;
-	int key_known = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, &key);
+	int key_known = !mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, &key);
 
 	uint8_t out_flag[2];
 	out_flag[0] = key_known ? 't' : 'f';
@@ -1398,6 +1399,7 @@ void read_from_socket(struct rstate *rs)
 
 	rs->read_buffer_size += nread;
 	rs->socket_readable = 0;
+	rs->read_buffer_loaded = 1;
 	printf("nread = %zu\n", nread);
 }
 
@@ -1508,5 +1510,5 @@ void replicator_iteration(struct rstate *rs)
 	printf("\n");
 	print_rstate(rs);
 
-	sleep(5);
+	sleep(60);
 }

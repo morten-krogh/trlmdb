@@ -20,8 +20,8 @@ void populate_db_1 (void)
 	rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 	if (rc) print_mdb_error(rc);
 
-	MDB_val key_1 = {1, "key_1"};
-	MDB_val val_1 = {2, "val_1"};
+	MDB_val key_1 = {5, "key_1"};
+	MDB_val val_1 = {5, "val_1"};
 	
 	rc = trlmdb_put(txn, &key_1, &val_1);
 	if (rc) print_mdb_error(rc);
