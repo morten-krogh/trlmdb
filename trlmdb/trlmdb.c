@@ -817,11 +817,14 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
  */
 
 struct conf_info {
-	char *path;
+	char *database;
 	char *node;
 	char *port;
-	int nremote;
-	char **remote;
+	int naccept;
+	char **accept_node;
+	int nconnect;
+	char **connect_node;
+	char **connect_address;
 };
 
 /* trim removes leading and trailing whitespace and returns the trimmed string. The argument string is modified. str must have a null terminator */
@@ -840,18 +843,14 @@ char *trim(char *str)
 	return start;
 }
 
-struct conf_info parse_conf_file(const char *conf_file, char **err)
+/* err must have enoug room for all errors. 100 bytes is more than enough */
+struct conf_info parse_conf_file(const char *conf_file, char *err)
 {
-	struct conf_info conf_info = {NULL, NULL, NULL, 0, NULL};
+	struct conf_info conf_info = {NULL, NULL, NULL, 0, NULL, 0, NULL};
 
-	/* This allocation is not checked, since there is no way of communicating an error if the
-	 * error itself can not be allocated. It will never fail in practice.
-	 */
-	*err = malloc(100);
-	
 	FILE *file;
 	if ((file = fopen(conf_file, "r")) == NULL) {
-		sprintf(*err, "The conf file %s could not be opened", conf_file);
+		sprintf(err, "The conf file %s could not be opened", conf_file);
 		return conf_info;
 	}
 
@@ -859,54 +858,60 @@ struct conf_info parse_conf_file(const char *conf_file, char **err)
 	for (;;) {
 		if (fgets(line, sizeof line, file) == NULL) break;
 		if (strlen(line) >= sizeof line - 1) {
-			sprintf(*err, "The conf file has too long lines");
+			sprintf(err, "The conf file has too long lines");
 			goto out;
 		}
 
 		char *right = line;
-		char *left = strsep(&right, ":");
+		char *left = strsep(&right, "=");
 		if (right == NULL) continue;
 
 		left = trim(left);
 		right = trim(right);
 
-		if (strcmp(left, "path") == 0) {
-			conf_info.path = strdup(right);
+		if (strcmp(left, "database") == 0) {
+			conf_info.database = strdup(right);
 		} else if (strcmp(left, "node") == 0) {
 			conf_info.node = strdup(right);
 		} else if (strcmp(left, "port") == 0) {
 			conf_info.port = strdup(right);
-		} else if (strcmp(left, "remote") == 0) {
-			conf_info.nremote++;
+		} else if (strcmp(left, "accept") == 0) {
+			conf_info.naccept++;
 			/* Allocation should not fail this early */ 
-			conf_info.remote = realloc(conf_info.remote, conf_info.nremote);
-			conf_info.remote[conf_info.nremote - 1] = strdup(right);
+			conf_info.accept_node = realloc(conf_info.accept_node, conf_info.naccept);
+			conf_info.accept_node[conf_info.naccept - 1] = strdup(right);
+		} else if (strcmp(left, "connect") == 0) {
+			char *address = right;
+			char *node = strsep(&address, " ");
+			address = trim(address);
+			node = trim(node);
+			conf_info.connect_node = realloc(conf_info.connect_node, conf_info.nconnect);
+			conf_info.connect_address = realloc(conf_info.connect_address, conf_info.nconnect);
+			conf_info.connect_node[conf_info.nconnect - 1] = node;
+			conf_info.connect_address[conf_info.nconnect - 1] = address;
 		}
 	}
 
 	if (!feof(file)) {
-		sprintf(*err, "There was a problem reading the conf file");
+		sprintf(err, "There was a problem reading the conf file");
 		goto out;
 	}
 
-	if (!conf_info.path) {
-		sprintf(*err, "There is no path in the conf file");
+	if (!conf_info.database) {
+		sprintf(err, "There is no database path in the conf file");
 		goto out;
 	}
 
 	if (!conf_info.node) {
-		sprintf(*err, "There is no node name in the conf file");
+		sprintf(err, "There is no node name in the conf file");
 		goto out;
 	}
 
-	if (!conf_info.port && conf_info.nremote == 0) {
-		sprintf(*err, "There is no port and no remote internet addresses in the conf file");
+	if (conf_info.naccept ==0 && conf_info.nconnect == 0) {
+		sprintf(err, "There is no accept or connect nodes in the conf file");
 		goto out;
 	}
 	
-	free(*err);
-	*err = NULL;
-
 out:
 	fclose(file);
 	return conf_info;
@@ -919,8 +924,9 @@ struct rstate {
 	TRLMDB_env *env;
 	int socket_fd;
 	int connection_is_open;
-	char *remote_hostname;
-	char *remote_servname;
+	char *connect_node;
+	char *connect_hostname;
+	char *connect_servname;
 	int should_connect;
 	int node_msg_sent;
 	int node_msg_received;
@@ -965,8 +971,9 @@ struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
 
 void rstate_free(struct rstate *rs)
 {
-	free(rs->remote_hostname);
-	free(rs->remote_servname);
+	free(rs->connect_node);
+	free(rs->connect_hostname);
+	free(rs->connect_servname);
 	free(rs->write_msg.buffer);
 	free(rs->read_buffer);
 	free(rs);
@@ -977,8 +984,9 @@ void print_rstate(struct rstate *rs)
 	printf("node = %s\n", rs->node);
 	printf("socket_fd = %d\n", rs->socket_fd);
 	printf("connection_is_open = %d\n", rs->connection_is_open);
-	printf("remote_hostname = %s\n", rs->remote_hostname);
-	printf("remote_servname = %s\n", rs->remote_servname);
+	printf("connect_node = %s\n", rs->connect_node);
+	printf("connect_hostname = %s\n", rs->connect_hostname);
+	printf("connect_servname = %s\n", rs->connect_servname);
 	printf("should_connect = %d\n", rs->should_connect);
 	printf("node_msg_sent = %d\n", rs->node_msg_sent);
 	printf("node_msg_received = %d\n", rs->node_msg_received);
@@ -1134,31 +1142,30 @@ void replicator(struct conf_info conf_info)
 	rc = trlmdb_env_create(&env);
 	if (rc) print_error_and_exit("The lmdb environment could not be created"); 
 
-	rc = trlmdb_env_open(env, conf_info.path, 0, 0644);
+	rc = trlmdb_env_open(env, conf_info.database, 0, 0644);
 	if (rc) print_error_and_exit("The database could not be opened");
 
 	pthread_t *threads;
-	if (conf_info.nremote > 0) {
-		threads = calloc(conf_info.nremote, sizeof threads);
+	if (conf_info.nconnect > 0) {
+		threads = calloc(conf_info.nconnect, sizeof threads);
 	}
-		
-	for (int i = 0; i < conf_info.nremote; i++) {
 
-		char *address = conf_info.remote[i];
-		
+	for (int i = 0; i < conf_info.nconnect; i++) {
 		struct rstate *rs = rstate_alloc_init(conf_info.node, env);
 		if (!rs) print_error_and_exit("The system is out of memory");
 
 		rs->should_connect = 1;
-		
-		char *semicolon = strchr(address, ':');
 
-		if (semicolon) {
-			rs->remote_hostname = strndup(address, semicolon - address);
-			rs->remote_servname = strndup(semicolon + 1, address + strlen(address) - semicolon - 1);
+		rs->connect_node = conf_info.connect_node[i];
+		char *address = conf_info.connect_node[i];
+		char *colon = strchr(address, ':');
+
+		if (colon) {
+			rs->connect_hostname = strndup(address, colon - address);
+			rs->connect_servname = strndup(colon + 1, address + strlen(address) - colon - 1);
 		} else {
-			rs->remote_hostname = strdup(address);
-			rs->remote_servname = strdup("80");
+			rs->connect_hostname = strdup(address);
+			rs->connect_servname = strdup("80");
 		}
 
 		pthread_attr_t attr;
@@ -1179,7 +1186,7 @@ void replicator(struct conf_info conf_info)
 		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info.node);
 	}
 
-	for (int i = 0; i < conf_info.nremote; i++) {
+	for (int i = 0; i < conf_info.nconnect; i++) {
 		pthread_join(threads[i], NULL);
 	}
 }
@@ -1209,7 +1216,7 @@ void connect_to_remote(struct rstate *rs)
 	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
 	
-	int rc = create_connection(PF_INET, rs->remote_hostname, rs->remote_servname, NULL);
+	int rc = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
 
 	if (rc) {
 		sleep(100);

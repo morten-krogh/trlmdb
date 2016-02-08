@@ -1,3 +1,4 @@
-node: node-1
-path: trlmdb-1
-port: 8000
+node = node-1
+database = trlmdb-1
+port = 8000
+accept = node-2
