@@ -441,6 +441,23 @@ int trlmdb_node_time_update(TRLMDB_txn *txn, char *node_name, uint8_t *time, uin
 	return rc;
 }
 
+/* returns 1 if node exists, 0 if the node does not exist, and -1 for an error */
+int trlmdb_node_exists(TRLMDB_env *env, char *node_name)
+{
+	MDB_val key = {strlen(node_name), node_name};
+	MDB_val data = {0, ""};
+
+	MDB_txn *txn;
+	int rc = mdb_txn_begin(env->mdb_env, NULL, MDB_RDONLY, &txn);
+	if (rc) return -1;
+
+	int found = mdb_get(txn, env->dbi_nodes, &key, &data);
+
+	mdb_txn_commit(txn);
+
+	return found == MDB_NOTFOUND ? 0 : 1;
+}
+
 int trlmdb_node_del(TRLMDB_txn *txn, char *node_name)
 {
 	size_t node_name_len = strlen(node_name);
@@ -1306,9 +1323,14 @@ void receive_node_msg(struct rstate *rs)
 
 	memmove(rs->read_buffer, rs->read_buffer + msg->size, rs->read_buffer_size - msg->size);
 	rs->read_buffer_size -= msg->size;
-       	
-	rs->remote_node = read_node_name_msg(msg);
-	rs->node_msg_received = 1;
+
+	char *remote_node = read_node_name_msg(msg);
+	if (trlmdb_node_exists(rs->env, remote_node)) {
+		rs->remote_node = remote_node;
+		rs->node_msg_received = 1;
+	} else {
+		fprintf(stderr, "The remote node name is unknown in the database\n");
+	}
 	
 	if (!rs->remote_node) rs->connection_is_open = 0;
 }
