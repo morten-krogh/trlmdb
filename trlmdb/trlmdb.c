@@ -725,10 +725,9 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 			rc = message_get_elem(msg, 4, &data, &data_size); 
 			if (rc) return 1;
 			MDB_val data_val = {data_size, data};
-			//trlmdb_put(txn, &key_val, &data_val);
 			trlmdb_insert_time_key_data(txn, time, &key_val, &data_val);
 		} else {
-			trlmdb_del(txn, &key_val);
+			trlmdb_insert_time_key_data(txn, time, &key_val, NULL);
 		}
 	}
 	
@@ -1446,7 +1445,7 @@ void write_to_socket(struct rstate *rs)
 
 void poll_socket(struct rstate *rs)
 {
-	int timeout = 1000;
+	int timeout = 1000000;
 	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
@@ -1510,5 +1509,5 @@ void replicator_iteration(struct rstate *rs)
 	printf("\n");
 	print_rstate(rs);
 
-	sleep(60);
+	/* sleep(2); */
 }
