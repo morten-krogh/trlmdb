@@ -414,7 +414,8 @@ int trlmdb_node_add(TRLMDB_txn *txn, char *node_name)
 {
 	MDB_val key = {strlen(node_name), node_name};
 	MDB_val data = {0, ""};
-	int rc = mdb_put(txn->mdb_txn, txn->env->dbi_nodes, &key, &data, 0);
+	int rc = mdb_put(txn->mdb_txn, txn->env->dbi_nodes, &key, &data, MDB_NOOVERWRITE);
+	if (rc == MDB_KEYEXIST) return 0;
 	if (rc) return rc;
 
 	return trlmdb_node_put_all_times(txn, node_name);
@@ -861,9 +862,11 @@ char *trim(char *str)
 }
 
 /* err must have enoug room for all errors. 100 bytes is more than enough */
-struct conf_info parse_conf_file(const char *conf_file, char *err)
+struct conf_info *parse_conf_file(const char *conf_file, char *err)
 {
-	struct conf_info conf_info = {NULL, NULL, NULL, 0, NULL, 0, NULL};
+	struct conf_info *conf_info = malloc(sizeof *conf_info);
+	struct conf_info aszero = {0};
+	*conf_info = aszero; // portable way of zeroing rstate
 
 	FILE *file;
 	if ((file = fopen(conf_file, "r")) == NULL) {
@@ -887,26 +890,26 @@ struct conf_info parse_conf_file(const char *conf_file, char *err)
 		right = trim(right);
 
 		if (strcmp(left, "database") == 0) {
-			conf_info.database = strdup(right);
+			conf_info->database = strdup(right);
 		} else if (strcmp(left, "node") == 0) {
-			conf_info.node = strdup(right);
+			conf_info->node = strdup(right);
 		} else if (strcmp(left, "port") == 0) {
-			conf_info.port = strdup(right);
+			conf_info->port = strdup(right);
 		} else if (strcmp(left, "accept") == 0) {
-			conf_info.naccept++;
+			conf_info->naccept++;
 			/* Allocation should not fail this early */ 
-			conf_info.accept_node = realloc(conf_info.accept_node, conf_info.naccept);
-			conf_info.accept_node[conf_info.naccept - 1] = strdup(right);
+			conf_info->accept_node = realloc(conf_info->accept_node, conf_info->naccept);
+			conf_info->accept_node[conf_info->naccept - 1] = strdup(right);
 		} else if (strcmp(left, "connect") == 0) {
-			conf_info.nconnect++;
+			conf_info->nconnect++;
 			char *address = right;
 			char *node = strsep(&address, " ");
 			address = trim(address);
 			node = trim(node);
-			conf_info.connect_node = realloc(conf_info.connect_node, conf_info.nconnect);
-			conf_info.connect_address = realloc(conf_info.connect_address, conf_info.nconnect);
-			conf_info.connect_node[conf_info.nconnect - 1] = strdup(node);
-			conf_info.connect_address[conf_info.nconnect - 1] = strdup(address);
+			conf_info->connect_node = realloc(conf_info->connect_node, conf_info->nconnect);
+			conf_info->connect_address = realloc(conf_info->connect_address, conf_info->nconnect);
+			conf_info->connect_node[conf_info->nconnect - 1] = strdup(node);
+			conf_info->connect_address[conf_info->nconnect - 1] = strdup(address);
 		}
 	}
 
@@ -915,22 +918,22 @@ struct conf_info parse_conf_file(const char *conf_file, char *err)
 		goto out;
 	}
 
-	if (!conf_info.database) {
+	if (!conf_info->database) {
 		sprintf(err, "There is no database path in the conf file");
 		goto out;
 	}
 
-	if (!conf_info.node) {
+	if (!conf_info->node) {
 		sprintf(err, "There is no node name in the conf file");
 		goto out;
 	}
 
-	if (conf_info.naccept != 0 && !conf_info.port) {
+	if (conf_info->naccept != 0 && !conf_info->port) {
 		sprintf(err, "There is no tcp port for listening");
 		goto out;
 	}
 	
-	if (conf_info.naccept == 0 && conf_info.nconnect == 0) {
+	if (conf_info->naccept == 0 && conf_info->nconnect == 0) {
 		sprintf(err, "There is no accept or connect nodes in the conf file");
 		goto out;
 	}
@@ -952,7 +955,8 @@ struct rstate {
 	char *connect_node;
 	char *connect_hostname;
 	char *connect_servname;
-	int should_connect;
+	int naccept;
+	char **accept_node;
 	int node_msg_sent;
 	int node_msg_received;
 	char *remote_node;
@@ -969,7 +973,7 @@ struct rstate {
 	int socket_writable;
 };
 
-struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
+struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
 {
 	struct rstate *rs = calloc(1, sizeof *rs);
 	if (!rs) return NULL;
@@ -977,8 +981,10 @@ struct rstate *rstate_alloc_init(char *node, TRLMDB_env *env)
 	struct rstate aszero = {0};
 	*rs = aszero; // portable way of zeroing rstate
 	
-	rs->node = node;
+	rs->node = conf_info->node;
 	rs->env = env;
+	rs->naccept = conf_info->naccept;
+	rs->accept_node = conf_info->accept_node;
 	rs->read_buffer_capacity = 10000; 
 	rs->read_buffer = malloc(rs->read_buffer_capacity);
 	if (!rs->read_buffer) {
@@ -1012,10 +1018,12 @@ void print_rstate(struct rstate *rs)
 	printf("connect_node = %s\n", rs->connect_node);
 	printf("connect_hostname = %s\n", rs->connect_hostname);
 	printf("connect_servname = %s\n", rs->connect_servname);
-	printf("should_connect = %d\n", rs->should_connect);
+	printf("naccept = %d\n", rs->naccept);
+	for (int i = 0; i < rs->naccept; i++) {
+		printf("accept_node = %s\n", rs->accept_node[i]);
+	}
 	printf("node_msg_sent = %d\n", rs->node_msg_sent);
 	printf("node_msg_received = %d\n", rs->node_msg_received);
-	printf("should_connect = %d\n", rs->should_connect);
 	printf("remote_node = %s\n", rs->remote_node);
 	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
 	print_buffer(rs->read_buffer, rs->read_buffer_size);
@@ -1092,7 +1100,7 @@ int create_listener(const int ai_family, const char *hostname, const char *servn
 
 void *replicator_loop(void *arg);
 
-void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
+void accept_loop(int listen_fd, TRLMDB_env *env, struct conf_info *conf_info)
 {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
@@ -1110,7 +1118,7 @@ void accept_loop(int listen_fd, TRLMDB_env *env, char *node)
 		int on = 1;
 		int rc = setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 		
-		struct rstate *rs = rstate_alloc_init(node, env);
+		struct rstate *rs = rstate_alloc_init(env, conf_info);
 		if(!rs) continue;
 		rs->socket_fd = accepted_fd;
 		rs->connection_is_open = 1;
@@ -1161,7 +1169,7 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 
 /* The replicator server */
 
-void replicator(struct conf_info conf_info)
+void replicator(struct conf_info *conf_info)
 {
 	int rc = 0;
 	TRLMDB_env *env;
@@ -1169,16 +1177,16 @@ void replicator(struct conf_info conf_info)
 	rc = trlmdb_env_create(&env);
 	if (rc) print_error_and_exit("The lmdb environment could not be created"); 
 
-	rc = trlmdb_env_open(env, conf_info.database, 0, 0644);
+	rc = trlmdb_env_open(env, conf_info->database, 0, 0644);
 	if (rc) print_error_and_exit("The database could not be opened");
 
 	pthread_t *threads;
-	if (conf_info.nconnect > 0) {
-		threads = calloc(conf_info.nconnect, sizeof threads);
+	if (conf_info->nconnect > 0) {
+		threads = calloc(conf_info->nconnect, sizeof threads);
 	}
 
-	for (int i = 0; i < conf_info.nconnect; i++) {
-		char *node = conf_info.connect_node[i];
+	for (int i = 0; i < conf_info->nconnect; i++) {
+		char *node = conf_info->connect_node[i];
 
 		TRLMDB_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
@@ -1188,13 +1196,11 @@ void replicator(struct conf_info conf_info)
 		rc = trlmdb_txn_commit(txn);
 		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
 		
-		struct rstate *rs = rstate_alloc_init(conf_info.node, env);
+		struct rstate *rs = rstate_alloc_init(env, conf_info);
 		if (!rs) print_error_and_exit("The system is out of memory");
 
-		rs->should_connect = 1;
-
 		rs->connect_node = node;
-		char *address = conf_info.connect_address[i];
+		char *address = conf_info->connect_address[i];
 		char *colon = strchr(address, ':');
 
 		if (colon) {
@@ -1218,8 +1224,8 @@ void replicator(struct conf_info conf_info)
 		threads[i] = thread;
 	}
 
-	for (int i = 0; i < conf_info.naccept; i++) {
-		char *node = conf_info.accept_node[i];
+	for (int i = 0; i < conf_info->naccept; i++) {
+		char *node = conf_info->accept_node[i];
 		
 		TRLMDB_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
@@ -1230,12 +1236,12 @@ void replicator(struct conf_info conf_info)
 		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
 	}
 	
-	if (conf_info.port) {
-		int listen_fd = create_listener(PF_INET, "localhost", conf_info.port, NULL);
-		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info.node);
+	if (conf_info->port) {
+		int listen_fd = create_listener(PF_INET, "localhost", conf_info->port, NULL);
+		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info);
 	}
 
-	for (int i = 0; i < conf_info.nconnect; i++) {
+	for (int i = 0; i < conf_info->nconnect; i++) {
 		pthread_join(threads[i], NULL);
 	}
 }
@@ -1250,7 +1256,7 @@ void *replicator_loop(void *arg)
 	for (;;) {
 		if (!rs->connection_is_open) {
 			close(rs->socket_fd);
-			if (!rs->should_connect) {
+			if (!rs->connect_node || (rs->node_msg_received && !rs->remote_node)) {
 				rstate_free(rs);
 				printf("Terminate thread\n");
 				return NULL;
@@ -1325,14 +1331,28 @@ void receive_node_msg(struct rstate *rs)
 	rs->read_buffer_size -= msg->size;
 
 	char *remote_node = read_node_name_msg(msg);
-	if (trlmdb_node_exists(rs->env, remote_node)) {
-		rs->remote_node = remote_node;
-		rs->node_msg_received = 1;
+
+	int acceptable = 0;
+	if (rs->connect_node) {
+		if (rs->connect_node && strcmp(rs->connect_node, remote_node) == 0) acceptable = 1;
 	} else {
-		fprintf(stderr, "The remote node name is unknown in the database\n");
+		for (int i = 0; i < rs->naccept; i++) {
+			if (strcmp(remote_node, rs->accept_node[i]) == 0) {
+				acceptable = 1;
+				break;
+			}
+		}
 	}
+
+	rs->node_msg_received = 1;
 	
-	if (!rs->remote_node) rs->connection_is_open = 0;
+	if (acceptable) {
+		rs->remote_node = remote_node;
+		rs->connection_is_open = 1;
+	} else {
+		rs->connection_is_open = 0;
+		fprintf(stderr, "The remote node name is not acceptable\n");
+	}
 }
 
 void read_messages_from_buffer(struct rstate *rs)
@@ -1488,5 +1508,5 @@ void replicator_iteration(struct rstate *rs)
 	printf("\n");
 	print_rstate(rs);
 
-	sleep(15);
+	sleep(5);
 }

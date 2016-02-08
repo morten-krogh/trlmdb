@@ -11,7 +11,7 @@ int main(int argc, char **argv)
 	}
 
 	char err[100];
-	struct conf_info conf_info = parse_conf_file(argv[1], err);
+	struct conf_info *conf_info = parse_conf_file(argv[1], err);
 
 	if (strcmp(err, "") != 0) {
 		fprintf(stderr, "%s\n", err);
