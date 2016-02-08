@@ -881,14 +881,15 @@ struct conf_info parse_conf_file(const char *conf_file, char *err)
 			conf_info.accept_node = realloc(conf_info.accept_node, conf_info.naccept);
 			conf_info.accept_node[conf_info.naccept - 1] = strdup(right);
 		} else if (strcmp(left, "connect") == 0) {
+			conf_info.nconnect++;
 			char *address = right;
 			char *node = strsep(&address, " ");
 			address = trim(address);
 			node = trim(node);
 			conf_info.connect_node = realloc(conf_info.connect_node, conf_info.nconnect);
 			conf_info.connect_address = realloc(conf_info.connect_address, conf_info.nconnect);
-			conf_info.connect_node[conf_info.nconnect - 1] = node;
-			conf_info.connect_address[conf_info.nconnect - 1] = address;
+			conf_info.connect_node[conf_info.nconnect - 1] = strdup(node);
+			conf_info.connect_address[conf_info.nconnect - 1] = strdup(address);
 		}
 	}
 
@@ -907,10 +908,17 @@ struct conf_info parse_conf_file(const char *conf_file, char *err)
 		goto out;
 	}
 
-	if (conf_info.naccept ==0 && conf_info.nconnect == 0) {
+	if (conf_info.naccept != 0 && !conf_info.port) {
+		sprintf(err, "There is no tcp port for listening");
+		goto out;
+	}
+	
+	if (conf_info.naccept == 0 && conf_info.nconnect == 0) {
 		sprintf(err, "There is no accept or connect nodes in the conf file");
 		goto out;
 	}
+
+	sprintf(err, "");
 	
 out:
 	fclose(file);
@@ -1109,6 +1117,8 @@ int create_connection(const int ai_family, const char *hostname, const char *ser
 
 	struct addrinfo *res;
 	int rc;
+
+	printf("hostname = %s, servname = %s\n", hostname, servname);
 	
 	if ((rc = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
 		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(rc));
@@ -1151,13 +1161,23 @@ void replicator(struct conf_info conf_info)
 	}
 
 	for (int i = 0; i < conf_info.nconnect; i++) {
+		char *node = conf_info.connect_node[i];
+
+		TRLMDB_txn *txn;
+		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+		if (rc) print_error_and_exit("There is a problem creating a transaction in the database\n");
+		rc = trlmdb_node_add(txn, node);
+		if (rc) print_error_and_exit("There is a problem inserting a node into the database\n");
+		rc = trlmdb_txn_commit(txn);
+		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
+		
 		struct rstate *rs = rstate_alloc_init(conf_info.node, env);
 		if (!rs) print_error_and_exit("The system is out of memory");
 
 		rs->should_connect = 1;
 
-		rs->connect_node = conf_info.connect_node[i];
-		char *address = conf_info.connect_node[i];
+		rs->connect_node = node;
+		char *address = conf_info.connect_address[i];
 		char *colon = strchr(address, ':');
 
 		if (colon) {
@@ -1179,6 +1199,18 @@ void replicator(struct conf_info conf_info)
 		}
 
 		threads[i] = thread;
+	}
+
+	for (int i = 0; i < conf_info.naccept; i++) {
+		char *node = conf_info.accept_node[i];
+		
+		TRLMDB_txn *txn;
+		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
+		if (rc) print_error_and_exit("There is a problem creating a transaction in the database\n");
+		rc = trlmdb_node_add(txn, node);
+		if (rc) print_error_and_exit("There is a problem inserting a node into the database\n");
+		rc = trlmdb_txn_commit(txn);
+		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
 	}
 	
 	if (conf_info.port) {

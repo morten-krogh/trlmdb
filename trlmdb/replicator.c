@@ -10,10 +10,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	char *err;
-	struct conf_info conf_info = parse_conf_file(argv[1], &err);
+	char err[100];
+	struct conf_info conf_info = parse_conf_file(argv[1], err);
 
-	if (err) {
+	if (strcmp(err, "") != 0) {
 		fprintf(stderr, "%s\n", err);
 		return 1;
 	}
