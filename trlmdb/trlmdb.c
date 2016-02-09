@@ -60,8 +60,7 @@ struct conf_info {
 struct message {
 	uint8_t *buffer;
 	uint64_t size;
-	uint64_t capacity;
-	int owner;
+	uint64_t cap;
 };
 
 /* Replicator state */
@@ -79,7 +78,7 @@ struct rstate {
 	int node_msg_received;
 	char *remote_node;
 	uint8_t *read_buffer;
-	uint64_t read_buffer_capacity;
+	uint64_t read_buffer_cap;
 	uint64_t read_buffer_size;
 	int read_buffer_loaded;
 	struct message *write_msg;
@@ -184,7 +183,7 @@ void print_rstate(struct rstate *rs)
 	printf("remote_node = %s\n", rs->remote_node);
 	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
 	print_buffer(rs->read_buffer, rs->read_buffer_size);
-	printf("read_buffer_capacity = %llu\n", rs->read_buffer_capacity);
+	printf("read_buffer_cap = %llu\n", rs->read_buffer_cap);
 	printf("read_buffer_loaded = %d\n", rs->read_buffer_loaded);
 	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
 	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
@@ -348,22 +347,21 @@ struct conf_info *parse_conf_file(const char *conf_file)
 
 /* Messages */
 
-struct message *msg_alloc_init()
+struct message *msg_alloc_init(uint64_t cap)
 {
+	cap = cap < 8 ? 8 : cap;
 	struct message *msg = tr_malloc(sizeof *msg);
-	msg->buffer = tr_malloc(256);
-	msg->capacity = 256;
+	msg->buffer = tr_malloc(cap);
+	msg->cap = cap;
 	encode_uint64(msg->buffer, 8);
 	msg->size = 8;
-	msg->owner = 1;
 
 	return msg;
 }
 
 void msg_free(struct message *msg)
 {
-	if (msg->owner)
-		free(msg->buffer);
+	free(msg->buffer);
 	free(msg);
 }
 
@@ -373,43 +371,27 @@ void msg_reset(struct message *msg)
 	msg->size = 8;
 }
 
-
-/* only use the returned msg for reading if owner is false */
-struct message *message_from_buffer(uint8_t *buffer, uint64_t buffer_size, int owner)
+struct message *msg_from_buffer(uint8_t *buffer, uint64_t buffer_size)
 {
 	if (buffer_size < 8) return NULL;
 	uint64_t size = decode_uint64(buffer);
 	if (buffer_size < size) return NULL;
 
-	struct message *msg = malloc(sizeof *msg);
-	if (!msg) return NULL;
-
+	struct message *msg = msg_alloc_init(size);
 	msg->size = size;
-	msg->capacity = size;
-	msg->owner = owner;
-
-	if (owner) {
-		msg->buffer = malloc(size);
-		if (!msg->buffer) {
-			free(msg);
-			return NULL;
-		}
-		memcpy(msg->buffer, buffer, size);
-	} else {
-		msg->buffer = buffer;
-	}
+	memcpy(msg->buffer, buffer, size);
 
 	return msg;
 }
 
-int message_append(struct message *msg, uint8_t *data, uint64_t size)
+int msg_append(struct message *msg, uint8_t *data, uint64_t size)
 {
-	uint64_t new_capacity = msg->size + 8 + size;
-	if (new_capacity > msg->capacity) {
-		uint8_t *realloc_buffer = realloc(msg->buffer, new_capacity);
+	uint64_t new_cap = msg->size + 8 + size;
+	if (new_cap > msg->cap) {
+		uint8_t *realloc_buffer = realloc(msg->buffer, new_cap);
 		if (!realloc_buffer) return 1;
 		msg->buffer = realloc_buffer;
-		msg->capacity = new_capacity;
+		msg->cap = new_cap;
 	}
 
 	encode_uint64(msg->buffer + msg->size, size);
@@ -907,10 +889,10 @@ int write_node_name_msg(struct message *msg, char *node_name)
 {
 	msg_reset(msg);
 
-	int rc = message_append(msg, (uint8_t*) "node", 4); 
+	int rc = msg_append(msg, (uint8_t*) "node", 4); 
 	if (rc) return rc;
 
-	rc = message_append(msg, (uint8_t*)node_name, strlen(node_name));
+	rc = msg_append(msg, (uint8_t*)node_name, strlen(node_name));
 
 	return rc;
 }
@@ -1021,24 +1003,24 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 
 	msg_reset(msg);
 
-	rc = message_append(msg, (uint8_t*) "time", 4);
+	rc = msg_append(msg, (uint8_t*) "time", 4);
 	if (rc) return rc;
 
-	rc = message_append(msg, out_flag, 2);
+	rc = msg_append(msg, out_flag, 2);
 	if (rc) return rc;
 
-	rc = message_append(msg, time, 20);
+	rc = msg_append(msg, time, 20);
 	if (rc) return rc;
 
 	if (out_flag[1] == 'f' && key_known) {
-		rc = message_append(msg, (uint8_t*)key.mv_data, key.mv_size);
+		rc = msg_append(msg, (uint8_t*)key.mv_data, key.mv_size);
 		if (rc) return rc;
 	
 		if (trlmdb_is_put_op(time)) {
 			MDB_val data;
 			rc = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, &data);
 			if (rc) return rc;
-			rc = message_append(msg, (uint8_t*)data.mv_data, data.mv_size);
+			rc = msg_append(msg, (uint8_t*)data.mv_data, data.mv_size);
 		}
 	}
 
@@ -1067,14 +1049,14 @@ struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info, i
 	rs->socket_fd = -1;
 	rs->naccept = conf_info->naccept;
 	rs->accept_node = conf_info->accept_node;
-	rs->read_buffer_capacity = 10000; 
-	rs->read_buffer = malloc(rs->read_buffer_capacity);
+	rs->read_buffer_cap = 10000; 
+	rs->read_buffer = malloc(rs->read_buffer_cap);
 	if (!rs->read_buffer) {
 		free(rs);
 		return NULL;
 	}
 
-	rs->write_msg = msg_alloc_init();
+	rs->write_msg = msg_alloc_init(256);
 	/* if (!msg_init(&rs->write_msg)) { */
 		/* free(rs->read_buffer); */
 		/* free(rs); */
@@ -1363,23 +1345,23 @@ void receive_node_msg(struct rstate *rs)
 	struct message *msg = NULL;
 
 	while (!msg) {
-		if (rs->read_buffer_size == rs->read_buffer_capacity) {
-			uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
+		if (rs->read_buffer_size == rs->read_buffer_cap) {
+			uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_cap);
 			if (!realloced) {
 				rs->socket_fd = -1;
 				return;
 			}
 			rs->read_buffer = realloced;
-			rs->read_buffer_capacity *= 2;
+			rs->read_buffer_cap *= 2;
 		}
-		ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
+		ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_cap - rs->read_buffer_size);
 		if (nread < 1) {
 			rs->socket_fd = -1;
 			return;
 		}
 		rs->read_buffer_size += nread;
 
-		msg = message_from_buffer(rs->read_buffer, rs->read_buffer_size, 0);
+		msg = msg_from_buffer(rs->read_buffer, rs->read_buffer_size);
 	}
 
 	memmove(rs->read_buffer, rs->read_buffer + msg->size, rs->read_buffer_size - msg->size);
@@ -1424,7 +1406,7 @@ void read_messages_from_buffer(struct rstate *rs)
 	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
 	if (rc) return;
 
-	while (msg_index < rs->read_buffer_size && ((msg = message_from_buffer(rs->read_buffer + msg_index, rs->read_buffer_size - msg_index, 0)) != NULL)) {
+	while (msg_index < rs->read_buffer_size && ((msg = msg_from_buffer(rs->read_buffer + msg_index, rs->read_buffer_size - msg_index)) != NULL)) {
 		int rc = read_time_msg(txn, rs->remote_node, msg);
 		msg_index += msg->size;
 	}
@@ -1440,17 +1422,17 @@ void read_messages_from_buffer(struct rstate *rs)
 
 void read_from_socket(struct rstate *rs)
 {
-	if (rs->read_buffer_size == rs->read_buffer_capacity) {
-		uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
+	if (rs->read_buffer_size == rs->read_buffer_cap) {
+		uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_cap);
 		if (!realloced) {
 			rs->socket_fd = -1;
 			return;
 		}
 		rs->read_buffer = realloced;
-		rs->read_buffer_capacity *= 2;
+		rs->read_buffer_cap *= 2;
 	}
 
-	ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
+	ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_cap - rs->read_buffer_size);
 	if (nread < 1) {
 		rs->socket_fd = -1;
 		return;
