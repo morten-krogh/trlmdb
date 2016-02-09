@@ -58,7 +58,7 @@ struct conf_info {
 };
 
 struct message {
-	uint8_t *buffer;
+	uint8_t *buf;
 	uint64_t size;
 	uint64_t cap;
 };
@@ -77,10 +77,10 @@ struct rstate {
 	int node_msg_sent;
 	int node_msg_received;
 	char *remote_node;
-	uint8_t *read_buffer;
-	uint64_t read_buffer_cap;
-	uint64_t read_buffer_size;
-	int read_buffer_loaded;
+	uint8_t *read_buf;
+	uint64_t read_buf_cap;
+	uint64_t read_buf_size;
+	int read_buf_loaded;
 	struct message *write_msg;
 	uint64_t write_msg_nwritten;
 	int write_msg_loaded;
@@ -133,11 +133,11 @@ void log_enomem()
 	log_fatal_err("malloc failed\n");
 }
 
-void print_buffer(uint8_t *buffer, uint64_t size)
+void print_buf(uint8_t *buf, uint64_t size)
 {
 	printf("size = %llu\n", size);
 	for (uint64_t i = 0; i < size; i++) {
-		printf("%02x", *(uint8_t *)(buffer + i));
+		printf("%02x", *(uint8_t *)(buf + i));
 	}
 	printf("\n");
 }
@@ -162,7 +162,7 @@ void print_message(struct message *msg)
 		uint64_t size;
 		msg_get_elem(msg, i, &data, &size);
 		printf("index = %llu\n", i);
-		print_buffer(data, size);
+		print_buf(data, size);
 	}
 }
 
@@ -181,16 +181,16 @@ void print_rstate(struct rstate *rs)
 	printf("node_msg_sent = %d\n", rs->node_msg_sent);
 	printf("node_msg_received = %d\n", rs->node_msg_received);
 	printf("remote_node = %s\n", rs->remote_node);
-	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
-	print_buffer(rs->read_buffer, rs->read_buffer_size);
-	printf("read_buffer_cap = %llu\n", rs->read_buffer_cap);
-	printf("read_buffer_loaded = %d\n", rs->read_buffer_loaded);
+	printf("read_buf_size = %llu\n", rs->read_buf_size);
+	print_buf(rs->read_buf, rs->read_buf_size);
+	printf("read_buf_cap = %llu\n", rs->read_buf_cap);
+	printf("read_buf_loaded = %d\n", rs->read_buf_loaded);
 	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
 	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
 	printf("write_msg\n");
 	print_message(rs->write_msg);
 	printf("write_time\n");
-	print_buffer(rs->write_time, 20);
+	print_buf(rs->write_time, 20);
 	printf("end_of_write_loop = %d\n", rs->end_of_write_loop);
 	printf("socket_readable = %d\n", rs->socket_readable);
 	printf("socket_writable = %d\n", rs->socket_writable);
@@ -251,10 +251,10 @@ static void encode_uint64(uint8_t *dst, const uint64_t src)
 	encode_uint32(dst + 4, lower);
 }
 
-static uint64_t decode_uint64(uint8_t *buffer)
+static uint64_t decode_uint64(uint8_t *buf)
 {
-	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buffer);
-	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buffer + 4));
+	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buf);
+	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buf + 4));
 
 	return (upper << 32) + lower;
 }
@@ -351,9 +351,9 @@ struct message *msg_alloc_init(uint64_t cap)
 {
 	cap = cap < 8 ? 8 : cap;
 	struct message *msg = tr_malloc(sizeof *msg);
-	msg->buffer = tr_malloc(cap);
+	msg->buf = tr_malloc(cap);
 	msg->cap = cap;
-	encode_uint64(msg->buffer, 8);
+	encode_uint64(msg->buf, 8);
 	msg->size = 8;
 
 	return msg;
@@ -361,25 +361,25 @@ struct message *msg_alloc_init(uint64_t cap)
 
 void msg_free(struct message *msg)
 {
-	free(msg->buffer);
+	free(msg->buf);
 	free(msg);
 }
 
 void msg_reset(struct message *msg)
 {
-	encode_uint64(msg->buffer, 8);
+	encode_uint64(msg->buf, 8);
 	msg->size = 8;
 }
 
-struct message *msg_from_buffer(uint8_t *buffer, uint64_t buffer_size)
+struct message *msg_from_buf(uint8_t *buf, uint64_t buf_size)
 {
-	if (buffer_size < 8) return NULL;
-	uint64_t size = decode_uint64(buffer);
-	if (buffer_size < size) return NULL;
+	if (buf_size < 8) return NULL;
+	uint64_t size = decode_uint64(buf);
+	if (buf_size < size) return NULL;
 
 	struct message *msg = msg_alloc_init(size);
 	msg->size = size;
-	memcpy(msg->buffer, buffer, size);
+	memcpy(msg->buf, buf, size);
 
 	return msg;
 }
@@ -388,73 +388,89 @@ int msg_append(struct message *msg, uint8_t *data, uint64_t size)
 {
 	uint64_t new_cap = msg->size + 8 + size;
 	if (new_cap > msg->cap) {
-		uint8_t *realloc_buffer = realloc(msg->buffer, new_cap);
-		if (!realloc_buffer) return 1;
-		msg->buffer = realloc_buffer;
+		uint8_t *realloc_buf = realloc(msg->buf, new_cap);
+		if (!realloc_buf) return 1;
+		msg->buf = realloc_buf;
 		msg->cap = new_cap;
 	}
 
-	encode_uint64(msg->buffer + msg->size, size);
+	encode_uint64(msg->buf + msg->size, size);
 	msg->size += 8;
 
-	memcpy(msg->buffer + msg->size, data, size);
+	memcpy(msg->buf + msg->size, data, size);
 	msg->size += size;
 
-	encode_uint64(msg->buffer, msg->size);
+	encode_uint64(msg->buf, msg->size);
 
 	return 0;
 }
 
 uint64_t msg_get_count(struct message *msg)
 {
-	uint8_t *buffer = msg->buffer + 8;
+	uint8_t *buf = msg->buf + 8;
 	uint64_t remaining = msg->size - 8;
 	uint64_t count = 0;
 	while (remaining >= 8) {
-		uint64_t length = decode_uint64(buffer);
+		uint64_t length = decode_uint64(buf);
 		if (remaining < 8 + length) return count;
 		count++;
 		remaining -= 8 + length;
-		buffer += 8 + length;
+		buf += 8 + length;
 	}
 	return count;
 }
 
 int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
 {
-	uint8_t *buffer = msg->buffer + 8;
+	uint8_t *buf = msg->buf + 8;
 	uint64_t remaining = msg->size - 8;
 	uint64_t count = 0;
 	while (remaining >= 8) {
-		uint64_t length = decode_uint64(buffer);
+		uint64_t length = decode_uint64(buf);
 		if (remaining < 8 + length) return 1;
 		if (index == count) {
-			*data = buffer + 8;
+			*data = buf + 8;
 			*size = length;
 			return 0;
 		}
 		count++;
 		remaining -= 8 + length;
-		buffer += 8 + length;
+		buf += 8 + length;
 	}	
 	return 1;
 }
 
+/* replicator state */
 
+struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info, int connector)
+{
+	struct rstate *rs = tr_malloc(sizeof *rs);
+	*rs = (struct rstate) {0};
+	
+	rs->node = conf_info->node;
+	rs->env = env;
+	rs->connector = connector;
+	rs->socket_fd = -1;
+	rs->naccept = conf_info->naccept;
+	rs->accept_node = conf_info->accept_node;
+	rs->read_buf_cap = 10000; 
+	rs->read_buf = tr_malloc(rs->read_buf_cap);
+	rs->write_msg = msg_alloc_init(256);
+	
+	return rs;
+}
 
+void rstate_free(struct rstate *rs)
+{
+	free(rs->connect_node);
+	free(rs->connect_hostname);
+	free(rs->connect_servname);
+	msg_free(rs->write_msg);
+	free(rs->read_buf);
+	free(rs);
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
+/* time stamps */
 
 
 
@@ -857,7 +873,6 @@ int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key)
 
 
 
-
 /* node name message */
 
 char * read_node_name_msg(struct message *msg)
@@ -1032,49 +1047,6 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 }
 
 
-
-
-
-struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info, int connector)
-{
-	struct rstate *rs = calloc(1, sizeof *rs);
-	if (!rs) return NULL;
-
-	struct rstate aszero = {0};
-	*rs = aszero; // portable way of zeroing rstate
-	
-	rs->node = conf_info->node;
-	rs->env = env;
-	rs->connector = connector;
-	rs->socket_fd = -1;
-	rs->naccept = conf_info->naccept;
-	rs->accept_node = conf_info->accept_node;
-	rs->read_buffer_cap = 10000; 
-	rs->read_buffer = malloc(rs->read_buffer_cap);
-	if (!rs->read_buffer) {
-		free(rs);
-		return NULL;
-	}
-
-	rs->write_msg = msg_alloc_init(256);
-	/* if (!msg_init(&rs->write_msg)) { */
-		/* free(rs->read_buffer); */
-		/* free(rs); */
-	/* } */
-	
-	return rs;
-}
-
-void rstate_free(struct rstate *rs)
-{
-	printf("rstate_free\n");
-	free(rs->connect_node);
-	free(rs->connect_hostname);
-	free(rs->connect_servname);
-	msg_free(rs->write_msg);
-	free(rs->read_buffer);
-	free(rs);
-}
 
 /* Network code */
 
@@ -1327,7 +1299,7 @@ void send_node_msg(struct rstate *rs)
 
 	uint64_t nwritten = 0;
 	while (nwritten < msg->size) {
-		ssize_t nbytes = write(rs->socket_fd, msg->buffer + nwritten, msg->size - nwritten);
+		ssize_t nbytes = write(rs->socket_fd, msg->buf + nwritten, msg->size - nwritten);
 		if (nbytes > 0) {
 			nwritten += nbytes;
 		} else {
@@ -1345,27 +1317,27 @@ void receive_node_msg(struct rstate *rs)
 	struct message *msg = NULL;
 
 	while (!msg) {
-		if (rs->read_buffer_size == rs->read_buffer_cap) {
-			uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_cap);
+		if (rs->read_buf_size == rs->read_buf_cap) {
+			uint8_t *realloced = (uint8_t*) realloc(rs->read_buf, 2 * rs->read_buf_cap);
 			if (!realloced) {
 				rs->socket_fd = -1;
 				return;
 			}
-			rs->read_buffer = realloced;
-			rs->read_buffer_cap *= 2;
+			rs->read_buf = realloced;
+			rs->read_buf_cap *= 2;
 		}
-		ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_cap - rs->read_buffer_size);
+		ssize_t nread = read(rs->socket_fd, rs->read_buf + rs->read_buf_size, rs->read_buf_cap - rs->read_buf_size);
 		if (nread < 1) {
 			rs->socket_fd = -1;
 			return;
 		}
-		rs->read_buffer_size += nread;
+		rs->read_buf_size += nread;
 
-		msg = msg_from_buffer(rs->read_buffer, rs->read_buffer_size);
+		msg = msg_from_buf(rs->read_buf, rs->read_buf_size);
 	}
 
-	memmove(rs->read_buffer, rs->read_buffer + msg->size, rs->read_buffer_size - msg->size);
-	rs->read_buffer_size -= msg->size;
+	memmove(rs->read_buf, rs->read_buf + msg->size, rs->read_buf_size - msg->size);
+	rs->read_buf_size -= msg->size;
 
 	char *remote_node = read_node_name_msg(msg);
 
@@ -1397,7 +1369,7 @@ void receive_node_msg(struct rstate *rs)
 	}
 }
 
-void read_messages_from_buffer(struct rstate *rs)
+void read_messages_from_buf(struct rstate *rs)
 {
 	struct message *msg;
 	uint64_t msg_index = 0;
@@ -1406,7 +1378,7 @@ void read_messages_from_buffer(struct rstate *rs)
 	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
 	if (rc) return;
 
-	while (msg_index < rs->read_buffer_size && ((msg = msg_from_buffer(rs->read_buffer + msg_index, rs->read_buffer_size - msg_index)) != NULL)) {
+	while (msg_index < rs->read_buf_size && ((msg = msg_from_buf(rs->read_buf + msg_index, rs->read_buf_size - msg_index)) != NULL)) {
 		int rc = read_time_msg(txn, rs->remote_node, msg);
 		msg_index += msg->size;
 	}
@@ -1414,33 +1386,33 @@ void read_messages_from_buffer(struct rstate *rs)
 	trlmdb_txn_commit(txn);
 
 	if (msg_index > 0) {
-		memmove(rs->read_buffer, rs->read_buffer + msg_index, rs->read_buffer_size - msg_index);
-		rs->read_buffer_size -= msg_index;
+		memmove(rs->read_buf, rs->read_buf + msg_index, rs->read_buf_size - msg_index);
+		rs->read_buf_size -= msg_index;
 	}
-	rs->read_buffer_loaded = 0;
+	rs->read_buf_loaded = 0;
 }
 
 void read_from_socket(struct rstate *rs)
 {
-	if (rs->read_buffer_size == rs->read_buffer_cap) {
-		uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_cap);
+	if (rs->read_buf_size == rs->read_buf_cap) {
+		uint8_t *realloced = (uint8_t*) realloc(rs->read_buf, 2 * rs->read_buf_cap);
 		if (!realloced) {
 			rs->socket_fd = -1;
 			return;
 		}
-		rs->read_buffer = realloced;
-		rs->read_buffer_cap *= 2;
+		rs->read_buf = realloced;
+		rs->read_buf_cap *= 2;
 	}
 
-	ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_cap - rs->read_buffer_size);
+	ssize_t nread = read(rs->socket_fd, rs->read_buf + rs->read_buf_size, rs->read_buf_cap - rs->read_buf_size);
 	if (nread < 1) {
 		rs->socket_fd = -1;
 		return;
 	}
 
-	rs->read_buffer_size += nread;
+	rs->read_buf_size += nread;
 	rs->socket_readable = 0;
-	rs->read_buffer_loaded = 1;
+	rs->read_buf_loaded = 1;
 	printf("nread = %zu\n", nread);
 }
 
@@ -1470,7 +1442,7 @@ void load_write_msg(struct rstate *rs)
 
 void write_to_socket(struct rstate *rs)
 {
-	ssize_t nwritten = write(rs->socket_fd, rs->write_msg->buffer, rs->write_msg->size - rs->write_msg_nwritten);
+	ssize_t nwritten = write(rs->socket_fd, rs->write_msg->buf, rs->write_msg->size - rs->write_msg_nwritten);
 	if (nwritten < 1) {
 		rs->socket_fd = -1;
 		return;
@@ -1539,9 +1511,9 @@ void replicator_iteration(struct rstate *rs)
 	} else if (!rs->node_msg_received) {
 		printf("receive_node_msg\n");
 		receive_node_msg(rs);
-	} else if (rs->read_buffer_loaded) {
+	} else if (rs->read_buf_loaded) {
 		printf("Read messages from buffer\n");
-		read_messages_from_buffer(rs);
+		read_messages_from_buf(rs);
 	} else if (rs->socket_readable) {
 		printf("Read from socket\n");
 		read_from_socket(rs);
