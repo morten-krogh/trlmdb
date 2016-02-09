@@ -12,7 +12,7 @@
 #include <pthread.h>
 #include <poll.h>
 
-//#include "trlmdb.h"
+#include "lmdb.h"
 
 #define DB_TIME_TO_KEY "db_time_to_key"
 #define DB_TIME_TO_DATA "db_time_to_data"
@@ -46,10 +46,32 @@ struct time {
 	uint64_t counter;
 };
 
+struct trlmdb_env {
+	MDB_env *mdb_env;
+	uint8_t time_id[4];
+	MDB_dbi dbi_time_to_key;
+	MDB_dbi dbi_time_to_data;
+	MDB_dbi dbi_key_to_time;
+	MDB_dbi dbi_nodes;
+	MDB_dbi dbi_node_time;
+};
+
+struct trlmdb_txn {
+	MDB_txn *mdb_txn;
+	struct trlmdb_env *env;
+	unsigned int flags;
+	struct time *time;
+};
+
+struct trlmdb_cursor {
+	struct trlmdb_txn *txn;
+	MDB_cursor *mdb_cursor;
+};
+
 /* Replicator state */
 struct rstate {
 	char *node;
-	TRLMDB_env *env;
+	struct trlmdb_env *env;
 	int connector;
 	int socket_fd;
 	char *connect_node;
@@ -71,29 +93,6 @@ struct rstate {
 	int end_of_write_loop;
 	int socket_readable;
 	int socket_writable;
-};
-
-struct TRLMDB_env {
-	MDB_env *mdb_env;
-	uint8_t time_id[4];
-	MDB_dbi dbi_time_to_key;
-	MDB_dbi dbi_time_to_data;
-	MDB_dbi dbi_key_to_time;
-	MDB_dbi dbi_nodes;
-	MDB_dbi dbi_node_time;
-};
-
-struct TRLMDB_txn {
-	MDB_txn *mdb_txn;
-	TRLMDB_env *env;
-	TRLMDB_txn *parent;
-	unsigned int flags;
-	struct time time;
-};
-
-struct TRLMDB_cursor {
-	TRLMDB_txn *txn;
-	MDB_cursor *mdb_cursor;
 };
 
 /* Logging and printing */
@@ -448,7 +447,7 @@ int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *
 
 /* replicator state */
 
-struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info, int connector)
+struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_info, int connector)
 {
 	struct rstate *rs = tr_malloc(sizeof *rs);
 	*rs = (struct rstate) {0};
@@ -490,8 +489,7 @@ void rstate_free(struct rstate *rs)
  * 8 bytes: A counter within each transaction. The counter increaes by two, and the last bit is 1
  * for a put operation and 0 for a del operation.
  *
- * Node-time is the concatenation of a node name and time. The concatenation uses '\0' as the
- * separator.  The node name must not contain the null byte.
+ * Node-time is the concatenation of a node name and time.
  */
 
 struct time *time_gettimeofday(struct time *time)
@@ -506,13 +504,6 @@ struct time *time_gettimeofday(struct time *time)
 	uint64_t frac_sec = (usec << 32) / 1000000;
 	encode_uint32(time->fraction, (uint32_t) frac_sec);
 
-	return time;
-}
-
-struct time *time_id(struct time *time)
-{
-        uint32_t rnd = arc4random();
-	encode_uint32(time->id, rnd);
 	return time;
 }
 
@@ -552,12 +543,13 @@ static int time_cmp(uint8_t *time1, uint8_t *time2)
 	return memcmp(time1, time2, 20);
 }
 
-uint8_t *encode_node_time(char *node, uint8_t *time)
+uint8_t *encode_node_time(char *node, size_t node_size, uint8_t *time)
 {
-	size_t len = strlen(node);
-	uint8_t *node_time = tr_malloc(len + 1 + 20);
-	memcpy(node_time, node, len + 1);
-	memcpy(node_time + len + 1, time, 20);
+	uint8_t *node_time = malloc(node_size + 20);
+	if (!node_time)
+		return NULL;
+	memcpy(node_time, node, node_size);
+	memcpy(node_time + node_size, time, 20);
 
 	return node_time;
 }
@@ -608,7 +600,7 @@ int create_listener(const char *hostname, const char *servname)
 	return listen_fd;
 }
 
-void accept_loop(int listen_fd, TRLMDB_env *env, struct conf_info *conf_info, void *(*handler)(void*))
+void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info *conf_info, void *(*handler)(void*))
 {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
@@ -712,60 +704,27 @@ void write_node_name(struct message *msg, const char *node_name)
  * database, and all dataase access should go throught these functions.
  */  
 
-int trlmdb_env_create(TRLMDB_env **env)
+int trlmdb_env_create(struct trlmdb_env **env)
 {
-	TRLMDB_env *db_env = calloc(1, sizeof *db_env);
-	if (!db_env) return ENOMEM;
+	*env = malloc(sizeof **env);
+	if (!*env) return ENOMEM;
 
-	uint32_t random = arc4random();
-	encode_uint32(db_env->time_component, random);
+	**env = (struct trlmdb_env) {0}; 
 	
-	int rc = mdb_env_create(&(db_env->mdb_env));
-	if (rc) free(db_env);
+	encode_uint32((*env)->time_id, arc4random());
+	
+	int rc = mdb_env_create(&((*env)->mdb_env));
+	if (rc) {
+		free(*env);
+		return rc;
+	}
 
-	mdb_env_set_maxdbs(db_env->mdb_env, 5);
-	
-	*env = db_env;
+	mdb_env_set_maxdbs((*env)->mdb_env, 5);
+
 	return rc;
 }
 
-
-
-
-
-
-static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
-{
-	MDB_cursor *cursor;
-	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_nodes, &cursor);
-	if (rc) return rc;
-
-	size_t node_time_size = 100;
-	uint8_t *node_time = malloc(node_time_size);
-	if (!node_time) return ENOMEM;
-	
-	MDB_val node_val, data;
-	MDB_val node_time_data = {2, "ff"};
-	while ((rc = mdb_cursor_get(cursor, &node_val, &data, MDB_NEXT)) == 0) {
-		if (node_val.mv_size > node_time_size - 20) {
-			node_time_size = node_val.mv_size + 20;
-			node_time = realloc(node_time, node_time_size);
-			if (!node_time) goto cleanup_node_time;
-		}
-		memcpy(node_time, node_val.mv_data, node_val.mv_size);
-		memcpy(node_time + node_val.mv_size, time, 20);
-		MDB_val node_time_key = {node_val.mv_size + 20, node_time};
-		rc = mdb_put(txn->mdb_txn, txn->env->dbi_node_time, &node_time_key, &node_time_data, 0);
-		if (rc) break;
-	}
-
-cleanup_node_time:
-	free(node_time);
-
-	return rc == MDB_NOTFOUND ? 0 : rc;
-}
-
-int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
+int trlmdb_env_open(struct trlmdb_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
 {
 	int rc = 0;
 
@@ -804,83 +763,141 @@ out:
 	return rc;
 }
 
-void trlmdb_env_close(TRLMDB_env *env)
+void trlmdb_env_close(struct trlmdb_env *env)
 {
 	mdb_env_close(env->mdb_env);
 	free(env);
 }
 
-MDB_env *trlmdb_mdb_env(TRLMDB_env *env)
+
+MDB_env *trlmdb_mdb_env(struct trlmdb_env *env)
 {
 	return env->mdb_env;
 }
 
-int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TRLMDB_txn **txn)
+int trlmdb_txn_begin(struct trlmdb_env *env, unsigned int flags, struct trlmdb_txn **txn)
 {
-	TRLMDB_txn *db_txn = calloc(1, sizeof *db_txn);
-	if (!db_txn) return ENOMEM;
+	*txn = malloc(sizeof **txn);
+	if (!*txn)
+		return ENOMEM;
 
-	db_txn->env = env;
-	db_txn->flags = flags;
-	db_txn->parent = parent;
+	**txn = (struct trlmdb_txn) {0};
 	
-	if (parent) {
-		memmove(db_txn->time, parent->time, 8);
-		db_txn->counter = parent->counter;
-	} else {
-		struct timeval tv;
-		int rc = gettimeofday(&tv, NULL);
-		if (rc) goto cleanup_txn;
-		encode_uint32(db_txn->time, (uint32_t) tv.tv_sec);
-		uint64_t usec = (uint64_t) tv.tv_usec;
-		uint64_t frac_sec = (usec << 32) / 1000000;
-		encode_uint32(db_txn->time + 4, (uint32_t) frac_sec);
-		db_txn->counter = 0;		
+	(*txn)->env = env;
+	(*txn)->flags = flags;
+	
+	(*txn)->time = malloc(sizeof *(*txn)->time);
+	if (!(*txn)->time) {
+		free(*txn);
+		return ENOMEM;
 	}
 
-	memmove(db_txn->time + 8, env->time_component, 4);
+	memcpy((*txn)->time->id, env->time_id, 4);
+	time_gettimeofday((*txn)->time);
+	(*txn)->time->counter = 0;
 	
-	int rc = mdb_txn_begin(env->mdb_env, parent ? parent->mdb_txn : NULL, flags, &(db_txn->mdb_txn));
-	if (rc) goto cleanup_txn;
+	int rc = mdb_txn_begin(env->mdb_env, NULL, flags, &((*txn)->mdb_txn));
+	if (rc) {
+		free((*txn)->time);
+		free(*txn);
+	}
 
-	*txn = db_txn;
-	
-	goto out;
-	
-cleanup_txn:
-	free(db_txn);
-out:
 	return rc;
 }
 
-int  trlmdb_txn_commit(TRLMDB_txn *txn)
+int  trlmdb_txn_commit(struct trlmdb_txn *txn)
 {
 	int rc = 0;
 
-	if (txn->parent) {
-		txn->parent->counter = txn->counter;
-	}
 	rc = mdb_txn_commit(txn->mdb_txn);
+	free(txn->time);
 	free(txn);
 
 	return rc;
 }
 
-void trlmdb_txn_abort(TRLMDB_txn *txn)
+void trlmdb_txn_abort(struct trlmdb_txn *txn)
 {
-	if (txn->parent) {
-		txn->parent->counter = txn->counter;
-	}
 	mdb_txn_abort(txn->mdb_txn);
+	free(txn->time);
 	free(txn);
 }
 
-MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn)
+static int trlmdb_node_put_time_all_nodes(struct trlmdb_env *env, MDB_txn *txn, uint8_t *time)
 {
-	return txn->mdb_txn;
+	MDB_cursor *cursor;
+	int rc = mdb_cursor_open(txn, env->dbi_nodes, &cursor);
+	if (rc)
+		return rc;
+
+	MDB_val node_val;
+	MDB_val empty_val;
+	MDB_val node_time_val = {2, "ff"};
+
+	while ((rc = mdb_cursor_get(cursor, &node_val, &empty_val, MDB_NEXT)) == 0) {
+		uint8_t *node_time = encode_node_time(node_val.mv_data, node_val.mv_size, time);
+		if (!node_time) {
+			rc = ENOMEM;
+			break;
+		}
+		MDB_val node_time_key = {node_val.mv_size + 20, node_time};
+		rc = mdb_put(txn, env->dbi_node_time, &node_time_key, &node_time_val, 0);
+		free(node_time);
+		if (rc)
+			break;
+	}
+
+	mdb_cursor_close(cursor);
+
+	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
+int trlmdb_insert_time_key_data(struct trlmdb_env *env, MDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *data)
+{
+	MDB_txn *child_txn;
+	int rc = mdb_txn_begin(env->mdb_env, txn, 0, &child_txn);
+	if (rc)
+		return rc;	
+
+	MDB_val time_val = {20, time};
+	
+	rc = mdb_put(child_txn, env->dbi_time_to_key, &time_val, key, 0);
+	if (rc)
+		goto abort_child_txn;
+
+	if (time_is_put(time)) {
+		rc = mdb_put(child_txn, env->dbi_time_to_data, &time_val,data, 0);
+		if (rc)
+			goto abort_child_txn;
+	}
+
+	int is_time_most_recent = 1;
+	MDB_val existing_time_val;
+	rc = mdb_get(child_txn, env->dbi_key_to_time, key, &existing_time_val);
+	if (!rc) {
+		is_time_most_recent = time_cmp(time, existing_time_val.mv_data) > 0;
+	}
+
+	if (is_time_most_recent) {
+		rc = mdb_put(child_txn, env->dbi_key_to_time, key, &time_val, 0);
+		if (rc)
+			goto abort_child_txn;
+	}
+
+	rc = trlmdb_node_put_time_all_nodes(env, child_txn, time);
+	if (rc)
+		goto abort_child_txn;
+	
+	rc = mdb_txn_commit(child_txn);
+	goto out;
+	
+abort_child_txn:
+	mdb_txn_abort(child_txn);
+out:	
+	return rc;
+}	
+
+int trlmdb_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -891,49 +908,10 @@ int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, data);
 }
 
-int trlmdb_insert_time_key_data(TRLMDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *data)
-{
-	int rc = 0;
 
-	MDB_val time_val = {20, time};
-	
-	TRLMDB_txn *child_txn;
-	rc = trlmdb_txn_begin(txn->env, txn, 0, &child_txn);
-	if (rc) return rc;
 
-	rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key, 0);
-	if (rc) goto cleanup_child_txn;
 
-	if (time_is_put(time)) {
-		rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_time_to_data, &time_val,data, 0);
-		if (rc) goto cleanup_child_txn;
-	}
-
-	int is_time_most_recent = 1;
-	MDB_val current_time_val;
-	rc = mdb_get(child_txn->mdb_txn, txn->env->dbi_key_to_time, key, &current_time_val);
-	if (!rc) {
-		is_time_most_recent = time_cmp(time, current_time_val.mv_data) > 0;
-	}
-
-	if (is_time_most_recent) {
-		rc = mdb_put(child_txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val, 0);
-		if (rc) goto cleanup_child_txn;
-	}
-
-	rc = trlmdb_node_put_time_all_nodes(child_txn, time);
-	if (rc) goto cleanup_child_txn;
-	
-	rc = trlmdb_txn_commit(child_txn);
-	goto out;
-	
-cleanup_child_txn:
-	trlmdb_txn_abort(child_txn);
-out:	
-	return rc;
-}	
-
-static int trlmdb_put_del(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
+static int trlmdb_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	uint8_t time[20];
 	memmove(time, txn->time, 12);
@@ -944,12 +922,12 @@ static int trlmdb_put_del(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 	return trlmdb_insert_time_key_data(txn, time, key, data);
 }
 
-int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
+int trlmdb_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	return trlmdb_put_del(txn, key, data);
 }
 
-int trlmdb_del(TRLMDB_txn *txn, MDB_val *key)
+int trlmdb_del(struct trlmdb_txn *txn, MDB_val *key)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -960,9 +938,10 @@ int trlmdb_del(TRLMDB_txn *txn, MDB_val *key)
 	return trlmdb_put_del(txn, key, NULL);
 }
 
-int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor)
+
+int trlmdb_cursor_open(struct trlmdb_txn *txn, struct trlmdb_cursor **cursor)
 {
-	TRLMDB_cursor *db_cursor = calloc(1, sizeof *db_cursor);
+	struct trlmdb_cursor *db_cursor = calloc(1, sizeof *db_cursor);
 	if (!db_cursor) return ENOMEM; 
 
 	*cursor = db_cursor;
@@ -970,12 +949,12 @@ int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor)
 	return mdb_cursor_open(txn->mdb_txn, txn->env->dbi_key_to_time, &db_cursor->mdb_cursor);
 }
 
-void trlmdb_cursor_close(TRLMDB_cursor *cursor){
+void trlmdb_cursor_close(struct trlmdb_cursor *cursor){
 	mdb_cursor_close(cursor->mdb_cursor);
 	free(cursor);
 }
 
-int trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op)
+int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op)
 {
 	MDB_val time_val;
 	
@@ -993,7 +972,8 @@ int trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *i
 	}
 }
 
-static int trlmdb_node_put_all_times(TRLMDB_txn *txn, char *node_name)
+
+static int trlmdb_node_put_all_times(struct trlmdb_txn *txn, char *node_name)
 {
 	MDB_cursor *cursor;
 	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_time_to_key, &cursor);
@@ -1018,7 +998,7 @@ static int trlmdb_node_put_all_times(TRLMDB_txn *txn, char *node_name)
 	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-int trlmdb_node_add(TRLMDB_txn *txn, char *node_name)
+int trlmdb_node_add(struct trlmdb_txn *txn, char *node_name)
 {
 	MDB_val key = {strlen(node_name), node_name};
 	MDB_val data = {0, ""};
@@ -1029,7 +1009,7 @@ int trlmdb_node_add(TRLMDB_txn *txn, char *node_name)
 	return trlmdb_node_put_all_times(txn, node_name);
 }
 
-int trlmdb_node_time_update(TRLMDB_txn *txn, char *node_name, uint8_t *time, uint8_t* flag)
+int trlmdb_node_time_update(struct trlmdb_txn *txn, char *node_name, uint8_t *time, uint8_t* flag)
 {
 	size_t node_name_len = strlen(node_name);
 	uint8_t *node_time = malloc(node_name_len + 20);  // 20 is the length of time.
@@ -1051,7 +1031,7 @@ int trlmdb_node_time_update(TRLMDB_txn *txn, char *node_name, uint8_t *time, uin
 }
 
 /* returns 1 if node exists, 0 if the node does not exist, and -1 for an error */
-int trlmdb_node_exists(TRLMDB_env *env, char *node_name)
+int trlmdb_node_exists(struct trlmdb_env *env, char *node_name)
 {
 	MDB_val key = {strlen(node_name), node_name};
 	MDB_val data = {0, ""};
@@ -1067,7 +1047,7 @@ int trlmdb_node_exists(TRLMDB_env *env, char *node_name)
 	return found == MDB_NOTFOUND ? 0 : 1;
 }
 
-int trlmdb_node_del(TRLMDB_txn *txn, char *node_name)
+int trlmdb_node_del(struct trlmdb_txn *txn, char *node_name)
 {
 	size_t node_name_len = strlen(node_name);
 	MDB_val key = {node_name_len, node_name};
@@ -1090,7 +1070,7 @@ int trlmdb_node_del(TRLMDB_txn *txn, char *node_name)
 	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key)
+int trlmdb_get_key(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 {
 	MDB_val time_val = {20, time};
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
@@ -1100,7 +1080,7 @@ int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key)
 
 /* time message */
 
-int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
+int read_time_msg(struct trlmdb_txn *txn, char *remote_node_name, struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
 	if (count < 3 || count > 5) return 1;
@@ -1154,7 +1134,7 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 }
 
 /* returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
-int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct message *msg)
+int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
 	size_t node_len = strlen(node);
 	
@@ -1239,7 +1219,7 @@ void *replicator_loop(void *arg);
 void replicator(struct conf_info *conf_info)
 {
 	int rc = 0;
-	TRLMDB_env *env;
+	struct trlmdb_env *env;
 
 	rc = trlmdb_env_create(&env);
 	if (rc) {
@@ -1261,7 +1241,7 @@ void replicator(struct conf_info *conf_info)
 	for (int i = 0; i < conf_info->nconnect; i++) {
 		char *node = conf_info->connect_node[i];
 
-		TRLMDB_txn *txn;
+		struct trlmdb_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 		if (rc)
 			log_mdb_err(rc);
@@ -1306,7 +1286,7 @@ void replicator(struct conf_info *conf_info)
 	for (int i = 0; i < conf_info->naccept; i++) {
 		char *node = conf_info->accept_node[i];
 		
-		TRLMDB_txn *txn;
+		struct trlmdb_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
 		if (rc)
 			log_mdb_err(rc);
@@ -1427,7 +1407,7 @@ void read_messages_from_buf(struct rstate *rs)
 	struct message *msg;
 	uint64_t msg_index = 0;
 
-	TRLMDB_txn *txn;
+	struct trlmdb_txn *txn;
 	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
 	if (rc) return;
 
@@ -1471,7 +1451,7 @@ void read_from_socket(struct rstate *rs)
 
 void load_write_msg(struct rstate *rs)
 {
-	TRLMDB_txn *txn;
+	struct trlmdb_txn *txn;
 	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
 	if (rc)
 		log_mdb_err(rc);
