@@ -522,7 +522,10 @@ struct time *time_prepare(struct time *time)
 
 uint8_t *time_encode(struct time *time, int is_put)
 {
-	uint8_t *encoded = tr_malloc(20);
+	uint8_t *encoded = malloc(20);
+	if (!encoded)
+		return NULL;
+
 	memcpy(encoded, time->seconds, 4);
 	memcpy(encoded + 4, time->fraction, 4);
 	memcpy(encoded + 8, time->id, 4);
@@ -901,25 +904,24 @@ int trlmdb_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
-	if (rc) return rc;
+	if (rc)
+		return rc;
 
 	if (!time_is_put(time_val.mv_data)) return MDB_NOTFOUND;
 
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, data);
 }
 
-
-
-
 static int trlmdb_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
-	uint8_t time[20];
-	memmove(time, txn->time, 12);
-	uint64_t counter = txn->counter + ((data != NULL) ? 1 : 0);
-	encode_uint64(time + 12, counter);
-	txn->counter += 2;
-
-	return trlmdb_insert_time_key_data(txn, time, key, data);
+	int is_put = data != NULL;
+	uint8_t *time = time_encode(txn->time, is_put);
+	if (!time)
+		return ENOMEM;
+	
+	time_inc(txn->time);
+	
+	return trlmdb_insert_time_key_data(txn->env, txn->mdb_txn, time, key, data);
 }
 
 int trlmdb_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
@@ -931,12 +933,22 @@ int trlmdb_del(struct trlmdb_txn *txn, MDB_val *key)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
-	if (rc) return rc;
+	if (rc)
+		return rc;
 
 	if (!time_is_put(time_val.mv_data)) return MDB_NOTFOUND;
 
 	return trlmdb_put_del(txn, key, NULL);
 }
+
+
+
+
+
+
+
+
+
 
 
 int trlmdb_cursor_open(struct trlmdb_txn *txn, struct trlmdb_cursor **cursor)
@@ -1077,7 +1089,6 @@ int trlmdb_get_key(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 }
 
 
-
 /* time message */
 
 int read_time_msg(struct trlmdb_txn *txn, char *remote_node_name, struct message *msg)
@@ -1211,7 +1222,6 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 
 	return 0;
 }
-
 
 /* The replicator server */
 void *replicator_loop(void *arg);
