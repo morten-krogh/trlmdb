@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <ctype.h>
@@ -19,7 +20,7 @@
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
 
-/* Managing the lmdb environment with the special databases */  
+/* Structs */
 
 struct TRLMDB_env {
 	MDB_env *mdb_env;
@@ -45,26 +46,92 @@ struct TRLMDB_cursor {
 	MDB_cursor *mdb_cursor;
 };
 
-void print_error(char *err)
+struct conf_info {
+	char *database;
+	char *node;
+	char *port;
+	int naccept;
+	char **accept_node;
+	int nconnect;
+	char **connect_node;
+	char **connect_address;
+};
+
+struct message {
+	uint8_t *buffer;
+	uint64_t size;
+	uint64_t capacity;
+	int owner;
+};
+
+/* Replicator state */
+struct rstate {
+	char *node;
+	TRLMDB_env *env;
+	int connector;
+	int socket_fd;
+	char *connect_node;
+	char *connect_hostname;
+	char *connect_servname;
+	int naccept;
+	char **accept_node;
+	int node_msg_sent;
+	int node_msg_received;
+	char *remote_node;
+	uint8_t *read_buffer;
+	uint64_t read_buffer_capacity;
+	uint64_t read_buffer_size;
+	int read_buffer_loaded;
+	struct message *write_msg;
+	uint64_t write_msg_nwritten;
+	int write_msg_loaded;
+	uint8_t write_time[20];
+	int end_of_write_loop;
+	int socket_readable;
+	int socket_writable;
+};
+
+/* Logging and printing */
+
+int log_stdout(const char * restrict format, ...)
 {
-	fprintf(stderr, "%s\n", err);
+	va_list ap;
+
+	va_start(ap, format);
+	int rc = vprintf(format, ap);
+	va_end(ap);
+	return rc;
 }
 
-void print_error_and_exit(char *err)
+int log_stderr(const char * restrict format, ...)
 {
-	print_error(err);
+	va_list ap;
+
+	va_start(ap, format);
+	int rc = vfprintf(stderr, format, ap);
+	va_end(ap);
+	return rc;
+}
+
+void log_fatal_err(const char * restrict format, ...)
+{
+ 	va_list ap;
+
+	va_start(ap, format);
+	int rc = vfprintf(stderr, format, ap);
+	va_end(ap);
+
 	exit(1);
 }
 
-void print_mdb_error(int rc)
+void log_mdb_err(int rc)
 {
-	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
+	log_fatal_err("lmdb error: %d, %s\n", rc, mdb_strerror(rc));
 }
 
-void print_mdb_error_and_exit(int rc)
+void log_enomem()
 {
-	print_mdb_error(rc);
-	exit(rc);
+	log_fatal_err("malloc failed\n");
 }
 
 void print_buffer(uint8_t *buffer, uint64_t size)
@@ -76,19 +143,346 @@ void print_buffer(uint8_t *buffer, uint64_t size)
 	printf("\n");
 }
 
-static void insert_uint32(uint8_t *dst, const uint32_t src)
+void print_mdb_val(MDB_val *val)
+{
+	printf("size = %zu, data = ", val->mv_size);
+	for (size_t i = 0; i < val->mv_size; i++) {
+		printf("%02x", *(uint8_t *)(val->mv_data + i));
+	}
+	printf("\n");
+}
+
+uint64_t msg_get_count(struct message *msg);
+int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size);
+void print_message(struct message *msg)
+{
+	uint64_t count = msg_get_count(msg);
+	printf("count = %llu\n", count);
+	for (uint64_t i = 0; i < count; i++) {
+		uint8_t *data;
+		uint64_t size;
+		msg_get_elem(msg, i, &data, &size);
+		printf("index = %llu\n", i);
+		print_buffer(data, size);
+	}
+}
+
+void print_rstate(struct rstate *rs)
+{
+	printf("node = %s\n", rs->node);
+	printf("connector = %d\n", rs->connector);
+	printf("socket_fd = %d\n", rs->socket_fd);
+	printf("connect_node = %s\n", rs->connect_node);
+	printf("connect_hostname = %s\n", rs->connect_hostname);
+	printf("connect_servname = %s\n", rs->connect_servname);
+	printf("naccept = %d\n", rs->naccept);
+	for (int i = 0; i < rs->naccept; i++) {
+		printf("accept_node = %s\n", rs->accept_node[i]);
+	}
+	printf("node_msg_sent = %d\n", rs->node_msg_sent);
+	printf("node_msg_received = %d\n", rs->node_msg_received);
+	printf("remote_node = %s\n", rs->remote_node);
+	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
+	print_buffer(rs->read_buffer, rs->read_buffer_size);
+	printf("read_buffer_capacity = %llu\n", rs->read_buffer_capacity);
+	printf("read_buffer_loaded = %d\n", rs->read_buffer_loaded);
+	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
+	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
+	printf("write_msg\n");
+	print_message(rs->write_msg);
+	printf("write_time\n");
+	print_buffer(rs->write_time, 20);
+	printf("end_of_write_loop = %d\n", rs->end_of_write_loop);
+	printf("socket_readable = %d\n", rs->socket_readable);
+	printf("socket_writable = %d\n", rs->socket_writable);
+}
+
+/* malloc */
+
+/* tr_malloc logs and exits if malloc fails */
+void *tr_malloc(size_t size)
+{
+	void *mem = malloc(size);
+	if (!mem)
+		log_enomem();
+
+	return mem;
+}
+
+void *tr_realloc(void *ptr, size_t size)
+{
+	void *mem = realloc(ptr, size);
+	if (!mem)
+		log_enomem();
+
+	return mem;
+}
+
+/* Util */
+
+/* trim removes leading and trailing whitespace and returns the trimmed string. The argument string is modified. str must have a null terminator */
+static char *trim(char *str)
+{
+	char *start = str;
+	while (isspace(*start)) start++;
+
+	if (*start == '\0') return start;
+
+	char *end = start + strlen(start) - 1;
+	while (isspace(*end)) end--;
+
+	*(end + 1) = '\0';
+
+	return start;
+}
+
+/* inserts big-endian uint32 in dst */
+static void encode_uint32(uint8_t *dst, const uint32_t src)
 {
 	uint32_t be = htonl(src);
 	memcpy(dst, &be, 4);
 }
 
-static void insert_uint64(uint8_t *dst, const uint64_t src)
+/* inserts big-endian uint64 in dst */
+static void encode_uint64(uint8_t *dst, const uint64_t src)
 {
 	uint32_t upper = (uint32_t) (src >> 32);
-	insert_uint32(dst, upper);
+	encode_uint32(dst, upper);
 	uint32_t lower = (uint32_t) src & 0xFFFFFFFF;
-	insert_uint32(dst + 4, lower);
+	encode_uint32(dst + 4, lower);
 }
+
+static uint64_t decode_uint64(uint8_t *buffer)
+{
+	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buffer);
+	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buffer + 4));
+
+	return (upper << 32) + lower;
+}
+
+/*
+ *  Conf file
+ *
+ * A conf file is read by the replicator. The format is
+ * a specification of a port to listen on and a number of
+ * nodes to connect to. All lines are optional. 
+ * 
+ * path: directory or path to the trlmdb database. 
+ * node: the name of this node 
+ * port: listening port 
+ * remote: internet address of remote nodes 
+ *
+ * Example:
+ *
+ * path: user-database 
+ * node: node-1
+ * port: 8000
+ * remote: 192.168.0.1:8000
+ * remote: 192.168.0.2:9000
+ */
+
+/* parse_conf_file logs an error and exits if the conf file is invalid */
+struct conf_info *parse_conf_file(const char *conf_file)
+{
+	struct conf_info *conf_info = tr_malloc(sizeof *conf_info);
+	*conf_info = (struct conf_info){0};
+
+	FILE *file;
+	if ((file = fopen(conf_file, "r")) == NULL)
+		log_fatal_err("The conf file %s could not be opened", conf_file);
+
+	char line[1024];
+	for (;;) {
+		if (fgets(line, sizeof line, file) == NULL) break;
+		if (strlen(line) >= sizeof line - 1)
+			log_fatal_err("The conf file %s has too long lines", conf_file);
+
+		char *right = line;
+		char *left = strsep(&right, "=");
+		if (right == NULL) continue;
+
+		left = trim(left);
+		right = trim(right);
+
+		if (strcmp(left, "database") == 0) {
+			conf_info->database = strdup(right);
+		} else if (strcmp(left, "node") == 0) {
+			conf_info->node = strdup(right);
+		} else if (strcmp(left, "port") == 0) {
+			conf_info->port = strdup(right);
+		} else if (strcmp(left, "accept") == 0) {
+			conf_info->naccept++;
+			conf_info->accept_node = tr_realloc(conf_info->accept_node, conf_info->naccept);
+			conf_info->accept_node[conf_info->naccept - 1] = strdup(right);
+		} else if (strcmp(left, "connect") == 0) {
+			conf_info->nconnect++;
+			char *address = right;
+			char *node = strsep(&address, " ");
+			address = trim(address);
+			node = trim(node);
+			conf_info->connect_node = tr_realloc(conf_info->connect_node, conf_info->nconnect);
+			conf_info->connect_address = tr_realloc(conf_info->connect_address, conf_info->nconnect);
+			conf_info->connect_node[conf_info->nconnect - 1] = strdup(node);
+			conf_info->connect_address[conf_info->nconnect - 1] = strdup(address);
+		}
+	}
+
+	if (!feof(file))
+		log_fatal_err("There was a problem reading the conf file");
+
+	if (!conf_info->database)
+		log_fatal_err("There is no database path in the conf file");
+
+	if (!conf_info->node)
+		log_fatal_err("There is no node name in the conf file");
+
+	if (conf_info->naccept != 0 && !conf_info->port)
+		log_fatal_err("There is no tcp port for listening");
+	
+	if (conf_info->naccept == 0 && conf_info->nconnect == 0)
+		log_fatal_err("There is no accept or connect nodes in the conf file");
+
+	fclose(file);
+	return conf_info;
+}
+
+/* Messages */
+
+struct message *msg_alloc_init()
+{
+	struct message *msg = tr_malloc(sizeof *msg);
+	msg->buffer = tr_malloc(256);
+	msg->capacity = 256;
+	encode_uint64(msg->buffer, 8);
+	msg->size = 8;
+	msg->owner = 1;
+
+	return msg;
+}
+
+void msg_free(struct message *msg)
+{
+	if (msg->owner)
+		free(msg->buffer);
+	free(msg);
+}
+
+void msg_reset(struct message *msg)
+{
+	encode_uint64(msg->buffer, 8);
+	msg->size = 8;
+}
+
+
+/* only use the returned msg for reading if owner is false */
+struct message *message_from_buffer(uint8_t *buffer, uint64_t buffer_size, int owner)
+{
+	if (buffer_size < 8) return NULL;
+	uint64_t size = decode_uint64(buffer);
+	if (buffer_size < size) return NULL;
+
+	struct message *msg = malloc(sizeof *msg);
+	if (!msg) return NULL;
+
+	msg->size = size;
+	msg->capacity = size;
+	msg->owner = owner;
+
+	if (owner) {
+		msg->buffer = malloc(size);
+		if (!msg->buffer) {
+			free(msg);
+			return NULL;
+		}
+		memcpy(msg->buffer, buffer, size);
+	} else {
+		msg->buffer = buffer;
+	}
+
+	return msg;
+}
+
+int message_append(struct message *msg, uint8_t *data, uint64_t size)
+{
+	uint64_t new_capacity = msg->size + 8 + size;
+	if (new_capacity > msg->capacity) {
+		uint8_t *realloc_buffer = realloc(msg->buffer, new_capacity);
+		if (!realloc_buffer) return 1;
+		msg->buffer = realloc_buffer;
+		msg->capacity = new_capacity;
+	}
+
+	encode_uint64(msg->buffer + msg->size, size);
+	msg->size += 8;
+
+	memcpy(msg->buffer + msg->size, data, size);
+	msg->size += size;
+
+	encode_uint64(msg->buffer, msg->size);
+
+	return 0;
+}
+
+uint64_t msg_get_count(struct message *msg)
+{
+	uint8_t *buffer = msg->buffer + 8;
+	uint64_t remaining = msg->size - 8;
+	uint64_t count = 0;
+	while (remaining >= 8) {
+		uint64_t length = decode_uint64(buffer);
+		if (remaining < 8 + length) return count;
+		count++;
+		remaining -= 8 + length;
+		buffer += 8 + length;
+	}
+	return count;
+}
+
+int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
+{
+	uint8_t *buffer = msg->buffer + 8;
+	uint64_t remaining = msg->size - 8;
+	uint64_t count = 0;
+	while (remaining >= 8) {
+		uint64_t length = decode_uint64(buffer);
+		if (remaining < 8 + length) return 1;
+		if (index == count) {
+			*data = buffer + 8;
+			*size = length;
+			return 0;
+		}
+		count++;
+		remaining -= 8 + length;
+		buffer += 8 + length;
+	}	
+	return 1;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* Managing the lmdb environment with the special databases */  
 
 int trlmdb_is_put_op(uint8_t *time)
 {
@@ -131,22 +525,13 @@ cleanup_node_time:
 	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-void print_mdb_val(MDB_val *val)
-{
-	printf("size = %zu, data = ", val->mv_size);
-	for (size_t i = 0; i < val->mv_size; i++) {
-		printf("%02x", *(uint8_t *)(val->mv_data + i));
-	}
-	printf("\n");
-}
-
 int trlmdb_env_create(TRLMDB_env **env)
 {
 	TRLMDB_env *db_env = calloc(1, sizeof *db_env);
 	if (!db_env) return ENOMEM;
 
 	uint32_t random = arc4random();
-	insert_uint32(db_env->time_component, random);
+	encode_uint32(db_env->time_component, random);
 	
 	int rc = mdb_env_create(&(db_env->mdb_env));
 	if (rc) free(db_env);
@@ -223,10 +608,10 @@ int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TR
 		struct timeval tv;
 		int rc = gettimeofday(&tv, NULL);
 		if (rc) goto cleanup_txn;
-		insert_uint32(db_txn->time, (uint32_t) tv.tv_sec);
+		encode_uint32(db_txn->time, (uint32_t) tv.tv_sec);
 		uint64_t usec = (uint64_t) tv.tv_usec;
 		uint64_t frac_sec = (usec << 32) / 1000000;
-		insert_uint32(db_txn->time + 4, (uint32_t) frac_sec);
+		encode_uint32(db_txn->time + 4, (uint32_t) frac_sec);
 		db_txn->counter = 0;		
 	}
 
@@ -330,7 +715,7 @@ static int trlmdb_put_del(TRLMDB_txn *txn, MDB_val *key, MDB_val *data)
 	uint8_t time[20];
 	memmove(time, txn->time, 12);
 	uint64_t counter = txn->counter + ((data != NULL) ? 1 : 0);
-	insert_uint64(time + 12, counter);
+	encode_uint64(time + 12, counter);
 	txn->counter += 2;
 
 	return trlmdb_insert_time_key_data(txn, time, key, data);
@@ -488,174 +873,25 @@ int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key)
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
 }
 
-/* Messages */
 
-struct message {
-	uint8_t *buffer;
-	uint64_t size;
-	uint64_t capacity;
-	int owner;
-};
 
-static uint64_t decode_length(uint8_t *buffer)
-{
-	uint64_t upper = (uint64_t) ntohl(*(uint32_t*) buffer);
-	uint64_t lower = (uint64_t) ntohl(*(uint32_t*) (buffer + 4));
-
-	return (upper << 32) + lower;
-}
-
-struct message *message_init(struct message *msg)
-{
-	msg->buffer = malloc(256);
-	if (!msg->buffer) return NULL;
-
-	msg->capacity = 256;
-	insert_uint64(msg->buffer, 8);
-	msg->size = 8;
-	msg->owner = 1;
-
-	return msg;
-}
-
-struct message *message_alloc_init()
-{
-	struct message *msg = malloc(sizeof *msg);
-	if (!msg) return NULL;
-
-	if (message_init(msg)) {
-		return msg;
-	} else {
-		free(msg);
-		return NULL;
-	}
-}
-
-void message_free(struct message *msg)
-{
-	if (msg->owner) free(msg->buffer);
-	free(msg);
-}
-
-void message_reset(struct message *msg)
-{
-	insert_uint64(msg->buffer, 8);
-	msg->size = 8;
-}
-
-/* only use the returned msg for reading if owner is false */
-struct message *message_from_buffer(uint8_t *buffer, uint64_t buffer_size, int owner)
-{
-	if (buffer_size < 8) return NULL;
-	uint64_t size = decode_length(buffer);
-	if (buffer_size < size) return NULL;
-
-	struct message *msg = malloc(sizeof *msg);
-	if (!msg) return NULL;
-
-	msg->size = size;
-	msg->capacity = size;
-	msg->owner = owner;
-
-	if (owner) {
-		msg->buffer = malloc(size);
-		if (!msg->buffer) {
-			free(msg);
-			return NULL;
-		}
-		memcpy(msg->buffer, buffer, size);
-	} else {
-		msg->buffer = buffer;
-	}
-
-	return msg;
-}
-
-int message_append(struct message *msg, uint8_t *data, uint64_t size)
-{
-	uint64_t new_capacity = msg->size + 8 + size;
-	if (new_capacity > msg->capacity) {
-		uint8_t *realloc_buffer = realloc(msg->buffer, new_capacity);
-		if (!realloc_buffer) return 1;
-		msg->buffer = realloc_buffer;
-		msg->capacity = new_capacity;
-	}
-
-	insert_uint64(msg->buffer + msg->size, size);
-	msg->size += 8;
-
-	memcpy(msg->buffer + msg->size, data, size);
-	msg->size += size;
-
-	insert_uint64(msg->buffer, msg->size);
-
-	return 0;
-}
-
-uint64_t message_get_count(struct message *msg)
-{
-	uint8_t *buffer = msg->buffer + 8;
-	uint64_t remaining = msg->size - 8;
-	uint64_t count = 0;
-	while (remaining >= 8) {
-		uint64_t length = decode_length(buffer);
-		if (remaining < 8 + length) return count;
-		count++;
-		remaining -= 8 + length;
-		buffer += 8 + length;
-	}
-	return count;
-}
-
-int message_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
-{
-	uint8_t *buffer = msg->buffer + 8;
-	uint64_t remaining = msg->size - 8;
-	uint64_t count = 0;
-	while (remaining >= 8) {
-		uint64_t length = decode_length(buffer);
-		if (remaining < 8 + length) return 1;
-		if (index == count) {
-			*data = buffer + 8;
-			*size = length;
-			return 0;
-		}
-		count++;
-		remaining -= 8 + length;
-		buffer += 8 + length;
-	}	
-	return 1;
-}
-
-void print_message(struct message *msg)
-{
-	uint64_t count = message_get_count(msg);
-	printf("count = %llu\n", count);
-	for (uint64_t i = 0; i < count; i++) {
-		uint8_t *data;
-		uint64_t size;
-		message_get_elem(msg, i, &data, &size);
-		printf("index = %llu\n", i);
-		print_buffer(data, size);
-	}
-}
 
 /* node name message */
 
 char * read_node_name_msg(struct message *msg)
 {
-	uint64_t count = message_get_count(msg);
+	uint64_t count = msg_get_count(msg);
 	if (count != 2) return NULL;
 
 	uint8_t *data;
 	uint64_t size;
 	
-	int rc = message_get_elem(msg, 0, &data, & size);
+	int rc = msg_get_elem(msg, 0, &data, & size);
 	if (rc) return NULL;
 
 	if (size != 4 || memcmp(data, "node", 4) != 0) return NULL;
 
-	rc = message_get_elem(msg, 1, &data, &size);
+	rc = msg_get_elem(msg, 1, &data, &size);
 	if (rc) return NULL;
 
 	char *node_name = malloc(size + 1);
@@ -669,7 +905,7 @@ char * read_node_name_msg(struct message *msg)
 
 int write_node_name_msg(struct message *msg, char *node_name)
 {
-	message_reset(msg);
+	msg_reset(msg);
 
 	int rc = message_append(msg, (uint8_t*) "node", 4); 
 	if (rc) return rc;
@@ -683,19 +919,19 @@ int write_node_name_msg(struct message *msg, char *node_name)
 
 int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 {
-	uint64_t count = message_get_count(msg);
+	uint64_t count = msg_get_count(msg);
 	if (count < 3 || count > 5) return 1;
 
 	uint8_t *data;
 	uint64_t size;
 	
-	int rc = message_get_elem(msg, 0, &data, &size);
+	int rc = msg_get_elem(msg, 0, &data, &size);
 	if (rc) return 1;
 
 	if (size != 4 || memcmp(data, "time", 4) != 0) return 1;
 
 	uint8_t *flag;
-	rc = message_get_elem(msg, 1, &flag, &size);
+	rc = msg_get_elem(msg, 1, &flag, &size);
 	if (rc) return 1;
 	if (size != 2) return 1;
 	if (flag[0] != 't' && flag[0] != 'f') return 1;
@@ -703,7 +939,7 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	
 	uint8_t *time;
 	
-	rc = message_get_elem(msg, 2, &time, &size);
+	rc = msg_get_elem(msg, 2, &time, &size);
 	if (rc || size != 20) return 1;
 
 	int is_put = trlmdb_is_put_op(time);
@@ -714,7 +950,7 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 	if (key_absent && count > 3) {
 		uint8_t *key;
 		uint64_t key_size;
-		rc = message_get_elem(msg, 3, &key, &key_size); 
+		rc = msg_get_elem(msg, 3, &key, &key_size); 
 		if (rc) return 1;
 
 		MDB_val key_val = {key_size, key};
@@ -722,7 +958,7 @@ int read_time_msg(TRLMDB_txn *txn, char *remote_node_name, struct message *msg)
 		if (is_put && count == 5) {
 			uint8_t *data;
 			uint64_t data_size;
-			rc = message_get_elem(msg, 4, &data, &data_size); 
+			rc = msg_get_elem(msg, 4, &data, &data_size); 
 			if (rc) return 1;
 			MDB_val data_val = {data_size, data};
 			trlmdb_insert_time_key_data(txn, time, &key_val, &data_val);
@@ -783,7 +1019,7 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 	out_flag[0] = key_known ? 't' : 'f';
 	out_flag[1] = *(uint8_t*)flag_val.mv_data;
 
-	message_reset(msg);
+	msg_reset(msg);
 
 	rc = message_append(msg, (uint8_t*) "time", 4);
 	if (rc) return rc;
@@ -813,167 +1049,11 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 	return 0;
 }
 
-/*
- *  Conf file
- *
- * A conf file is read by the replicator. The format is
- * a specification of a port to listen on and a number of
- * nodes to connect to. All lines are optional. 
- * 
- * path: directory or path to the trlmdb database. 
- * node: the name of this node 
- * port: listening port 
- * remote: internet address of remote nodes 
- *
- * Example:
- *
- * path: user-database 
- * node: node-1
- * port: 8000
- * remote: 192.168.0.1:8000
- * remote: 192.168.0.2:9000
- */
 
-struct conf_info {
-	char *database;
-	char *node;
-	char *port;
-	int naccept;
-	char **accept_node;
-	int nconnect;
-	char **connect_node;
-	char **connect_address;
-};
 
-/* trim removes leading and trailing whitespace and returns the trimmed string. The argument string is modified. str must have a null terminator */
-char *trim(char *str)
-{
-	char *start = str;
-	while (isspace(*start)) start++;
 
-	if (*start == '\0') return start;
 
-	char *end = start + strlen(start) - 1;
-	while (isspace(*end)) end--;
-
-	*(end + 1) = '\0';
-
-	return start;
-}
-
-/* err must have enoug room for all errors. 100 bytes is more than enough */
-struct conf_info *parse_conf_file(const char *conf_file, char *err)
-{
-	struct conf_info *conf_info = malloc(sizeof *conf_info);
-	struct conf_info aszero = {0};
-	*conf_info = aszero; // portable way of zeroing rstate
-
-	FILE *file;
-	if ((file = fopen(conf_file, "r")) == NULL) {
-		sprintf(err, "The conf file %s could not be opened", conf_file);
-		return conf_info;
-	}
-
-	char line[1024];
-	for (;;) {
-		if (fgets(line, sizeof line, file) == NULL) break;
-		if (strlen(line) >= sizeof line - 1) {
-			sprintf(err, "The conf file has too long lines");
-			goto out;
-		}
-
-		char *right = line;
-		char *left = strsep(&right, "=");
-		if (right == NULL) continue;
-
-		left = trim(left);
-		right = trim(right);
-
-		if (strcmp(left, "database") == 0) {
-			conf_info->database = strdup(right);
-		} else if (strcmp(left, "node") == 0) {
-			conf_info->node = strdup(right);
-		} else if (strcmp(left, "port") == 0) {
-			conf_info->port = strdup(right);
-		} else if (strcmp(left, "accept") == 0) {
-			conf_info->naccept++;
-			/* Allocation should not fail this early */ 
-			conf_info->accept_node = realloc(conf_info->accept_node, conf_info->naccept);
-			conf_info->accept_node[conf_info->naccept - 1] = strdup(right);
-		} else if (strcmp(left, "connect") == 0) {
-			conf_info->nconnect++;
-			char *address = right;
-			char *node = strsep(&address, " ");
-			address = trim(address);
-			node = trim(node);
-			conf_info->connect_node = realloc(conf_info->connect_node, conf_info->nconnect);
-			conf_info->connect_address = realloc(conf_info->connect_address, conf_info->nconnect);
-			conf_info->connect_node[conf_info->nconnect - 1] = strdup(node);
-			conf_info->connect_address[conf_info->nconnect - 1] = strdup(address);
-		}
-	}
-
-	if (!feof(file)) {
-		sprintf(err, "There was a problem reading the conf file");
-		goto out;
-	}
-
-	if (!conf_info->database) {
-		sprintf(err, "There is no database path in the conf file");
-		goto out;
-	}
-
-	if (!conf_info->node) {
-		sprintf(err, "There is no node name in the conf file");
-		goto out;
-	}
-
-	if (conf_info->naccept != 0 && !conf_info->port) {
-		sprintf(err, "There is no tcp port for listening");
-		goto out;
-	}
-	
-	if (conf_info->naccept == 0 && conf_info->nconnect == 0) {
-		sprintf(err, "There is no accept or connect nodes in the conf file");
-		goto out;
-	}
-
-	sprintf(err, "");
-	
-out:
-	fclose(file);
-	return conf_info;
-}
-
-/* Replicator state */
-
-struct rstate {
-	char *node;
-	TRLMDB_env *env;
-	int socket_fd;
-	int connection_is_open;
-	char *connect_node;
-	char *connect_hostname;
-	char *connect_servname;
-	int naccept;
-	char **accept_node;
-	int node_msg_sent;
-	int node_msg_received;
-	char *remote_node;
-	uint8_t *read_buffer;
-	uint64_t read_buffer_capacity;
-	uint64_t read_buffer_size;
-	int read_buffer_loaded;
-	struct message write_msg;
-	uint64_t write_msg_nwritten;
-	int write_msg_loaded;
-	uint8_t write_time[20];
-	int end_of_write_loop;
-	int socket_readable;
-	int socket_writable;
-};
-
-struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
+struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info, int connector)
 {
 	struct rstate *rs = calloc(1, sizeof *rs);
 	if (!rs) return NULL;
@@ -983,6 +1063,7 @@ struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
 	
 	rs->node = conf_info->node;
 	rs->env = env;
+	rs->connector = connector;
 	rs->socket_fd = -1;
 	rs->naccept = conf_info->naccept;
 	rs->accept_node = conf_info->accept_node;
@@ -992,11 +1073,12 @@ struct rstate *rstate_alloc_init(TRLMDB_env *env, struct conf_info *conf_info)
 		free(rs);
 		return NULL;
 	}
-	
-	if (!message_init(&rs->write_msg)) {
-		free(rs->read_buffer);
-		free(rs);
-	}
+
+	rs->write_msg = msg_alloc_init();
+	/* if (!msg_init(&rs->write_msg)) { */
+		/* free(rs->read_buffer); */
+		/* free(rs); */
+	/* } */
 	
 	return rs;
 }
@@ -1007,39 +1089,9 @@ void rstate_free(struct rstate *rs)
 	free(rs->connect_node);
 	free(rs->connect_hostname);
 	free(rs->connect_servname);
-	free(rs->write_msg.buffer);
+	msg_free(rs->write_msg);
 	free(rs->read_buffer);
 	free(rs);
-}
-
-void print_rstate(struct rstate *rs)
-{
-	printf("node = %s\n", rs->node);
-	printf("socket_fd = %d\n", rs->socket_fd);
-	printf("connection_is_open = %d\n", rs->connection_is_open);
-	printf("connect_node = %s\n", rs->connect_node);
-	printf("connect_hostname = %s\n", rs->connect_hostname);
-	printf("connect_servname = %s\n", rs->connect_servname);
-	printf("naccept = %d\n", rs->naccept);
-	for (int i = 0; i < rs->naccept; i++) {
-		printf("accept_node = %s\n", rs->accept_node[i]);
-	}
-	printf("node_msg_sent = %d\n", rs->node_msg_sent);
-	printf("node_msg_received = %d\n", rs->node_msg_received);
-	printf("remote_node = %s\n", rs->remote_node);
-	printf("read_buffer_size = %llu\n", rs->read_buffer_size);
-	print_buffer(rs->read_buffer, rs->read_buffer_size);
-	printf("read_buffer_capacity = %llu\n", rs->read_buffer_capacity);
-	printf("read_buffer_loaded = %d\n", rs->read_buffer_loaded);
-	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
-	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
-	printf("write_msg\n");
-	print_message(&rs->write_msg);
-	printf("write_time\n");
-	print_buffer(rs->write_time, 20);
-	printf("end_of_write_loop = %d\n", rs->end_of_write_loop);
-	printf("socket_readable = %d\n", rs->socket_readable);
-	printf("socket_writable = %d\n", rs->socket_writable);
 }
 
 /* Network code */
@@ -1120,10 +1172,9 @@ void accept_loop(int listen_fd, TRLMDB_env *env, struct conf_info *conf_info)
 		int on = 1;
 		int rc = setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 		
-		struct rstate *rs = rstate_alloc_init(env, conf_info);
+		struct rstate *rs = rstate_alloc_init(env, conf_info, 0);
 		if(!rs) continue;
 		rs->socket_fd = accepted_fd;
-		rs->connection_is_open = 1;
 		
 		pthread_t thread;
 		if (pthread_create(&thread, &attr, replicator_loop, rs) != 0) {
@@ -1183,10 +1234,16 @@ void replicator(struct conf_info *conf_info)
 	TRLMDB_env *env;
 
 	rc = trlmdb_env_create(&env);
-	if (rc) print_error_and_exit("The lmdb environment could not be created"); 
+	if (rc) {
+		log_stderr("The lmdb environment could not be created");
+		exit(1);
+	}
 
 	rc = trlmdb_env_open(env, conf_info->database, 0, 0644);
-	if (rc) print_error_and_exit("The database could not be opened");
+	if (rc) {
+		log_stderr("The database could not be opened");
+		exit(1);
+	}
 
 	pthread_t *threads;
 	if (conf_info->nconnect > 0) {
@@ -1198,14 +1255,20 @@ void replicator(struct conf_info *conf_info)
 
 		TRLMDB_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
-		if (rc) print_error_and_exit("There is a problem creating a transaction in the database\n");
-		rc = trlmdb_node_add(txn, node);
-		if (rc) print_error_and_exit("There is a problem inserting a node into the database\n");
-		rc = trlmdb_txn_commit(txn);
-		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
+		if (rc)
+			log_mdb_err(rc);
 		
-		struct rstate *rs = rstate_alloc_init(env, conf_info);
-		if (!rs) print_error_and_exit("The system is out of memory");
+		rc = trlmdb_node_add(txn, node);
+		if (rc)
+			log_mdb_err(rc);
+
+		rc = trlmdb_txn_commit(txn);
+		if (rc)
+			log_mdb_err(rc);
+		
+		struct rstate *rs = rstate_alloc_init(env, conf_info, 1);
+		if (!rs)
+			log_enomem();
 
 		rs->connect_node = node;
 		char *address = conf_info->connect_address[i];
@@ -1237,11 +1300,16 @@ void replicator(struct conf_info *conf_info)
 		
 		TRLMDB_txn *txn;
 		int rc = trlmdb_txn_begin(env, NULL, 0, &txn);
-		if (rc) print_error_and_exit("There is a problem creating a transaction in the database\n");
+		if (rc)
+			log_mdb_err(rc);
+
 		rc = trlmdb_node_add(txn, node);
-		if (rc) print_error_and_exit("There is a problem inserting a node into the database\n");
+		if (rc)
+			log_mdb_err(rc);
+
 		rc = trlmdb_txn_commit(txn);
-		if (rc) print_error_and_exit("There is a problem commiting a transaction in the database\n");
+		if (rc)
+			log_mdb_err(rc);
 	}
 	
 	if (conf_info->port) {
@@ -1254,52 +1322,23 @@ void replicator(struct conf_info *conf_info)
 	}
 }
 
-void replicator_iteration(struct rstate *rs);
-
-/* The replicator thread start routine */
-void *replicator_loop(void *arg)
-{
-	struct rstate *rs = (struct rstate*) arg;
-
-	for (;;) {
-		if (!rs->connection_is_open) {
-			printf("rs->socket_fd = %d\n", rs->socket_fd);
-			if (rs->socket_fd != -1) {
-				close(rs->socket_fd);
-				rs->socket_fd = -1;
-			}
-			if (!rs->connect_node || (rs->node_msg_received && !rs->remote_node)) {
-				rstate_free(rs);
-				printf("Terminate thread\n");
-				return NULL;
-			}
-		}
-		replicator_iteration(rs);
-	}
-}
-
 void connect_to_remote(struct rstate *rs)
 {
 	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
 	
-	int socket_fd = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
-	printf("socket_fd = %d\n", socket_fd); 
-	sleep(2);
+	rs->socket_fd = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
+	printf("socket_fd = %d\n", rs->socket_fd); 
 	
-	if (socket_fd == -1) {
+	if (rs->socket_fd == -1) {
+		printf("Connection could not be created\n");
 		sleep(100);
-		rs->socket_fd = 0;
-		rs->connection_is_open = 0;
-	} else {
-		rs->socket_fd = socket_fd;
-		rs->connection_is_open = 1;
 	}
 }
 
 void send_node_msg(struct rstate *rs)
 {
-	struct message *msg = &rs->write_msg;
+	struct message *msg = rs->write_msg;
 	
 	int rc = write_node_name_msg(msg, rs->node);
 	if (rc) return;
@@ -1310,13 +1349,13 @@ void send_node_msg(struct rstate *rs)
 		if (nbytes > 0) {
 			nwritten += nbytes;
 		} else {
-			rs->connection_is_open = 0;
+			rs->socket_fd = -1;
 			return;
 		}
 	}
 
 	rs->node_msg_sent = 1;
-	message_reset(&rs->write_msg);
+	msg_reset(rs->write_msg);
 }
 
 void receive_node_msg(struct rstate *rs)
@@ -1327,7 +1366,7 @@ void receive_node_msg(struct rstate *rs)
 		if (rs->read_buffer_size == rs->read_buffer_capacity) {
 			uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
 			if (!realloced) {
-				rs->connection_is_open = 0;
+				rs->socket_fd = -1;
 				return;
 			}
 			rs->read_buffer = realloced;
@@ -1335,7 +1374,7 @@ void receive_node_msg(struct rstate *rs)
 		}
 		ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
 		if (nread < 1) {
-			rs->connection_is_open = 0;
+			rs->socket_fd = -1;
 			return;
 		}
 		rs->read_buffer_size += nread;
@@ -1366,15 +1405,12 @@ void receive_node_msg(struct rstate *rs)
 		}
 	}
 
-	printf("hello\n");
-	
 	rs->node_msg_received = 1;
 	
 	if (acceptable) {
 		rs->remote_node = remote_node;
-		rs->connection_is_open = 1;
 	} else {
-		rs->connection_is_open = 0;
+		rs->socket_fd = -1;
 		fprintf(stderr, "The remote node name is not acceptable\n");
 	}
 }
@@ -1407,7 +1443,7 @@ void read_from_socket(struct rstate *rs)
 	if (rs->read_buffer_size == rs->read_buffer_capacity) {
 		uint8_t *realloced = (uint8_t*) realloc(rs->read_buffer, 2 * rs->read_buffer_capacity);
 		if (!realloced) {
-			rs->connection_is_open = 0;
+			rs->socket_fd = -1;
 			return;
 		}
 		rs->read_buffer = realloced;
@@ -1416,7 +1452,7 @@ void read_from_socket(struct rstate *rs)
 
 	ssize_t nread = read(rs->socket_fd, rs->read_buffer + rs->read_buffer_size, rs->read_buffer_capacity - rs->read_buffer_size);
 	if (nread < 1) {
-		rs->connection_is_open = 0;
+		rs->socket_fd = -1;
 		return;
 	}
 
@@ -1430,11 +1466,12 @@ void load_write_msg(struct rstate *rs)
 {
 	TRLMDB_txn *txn;
 	int rc = trlmdb_txn_begin(rs->env, NULL, 0, &txn);
-	if (rc) return;
+	if (rc)
+		log_mdb_err(rc);
 
-	rc = write_time_message(txn, rs->write_time, rs->remote_node, &rs->write_msg);
-
-	if (rc) print_mdb_error(rc);
+	rc = write_time_message(txn, rs->write_time, rs->remote_node, rs->write_msg);
+	if (rc)
+		log_mdb_err(rc);
 	
 	if (rc == 0) {
 		rs->write_msg_loaded = 1;
@@ -1444,22 +1481,24 @@ void load_write_msg(struct rstate *rs)
 		memset(rs->write_time, 0, 20);
 	}
 
-	trlmdb_txn_commit(txn);
+	rc = trlmdb_txn_commit(txn);
+	if (rc)
+		log_mdb_err(rc);
 }
 
 void write_to_socket(struct rstate *rs)
 {
-	ssize_t nwritten = write(rs->socket_fd, rs->write_msg.buffer, rs->write_msg.size - rs->write_msg_nwritten);
+	ssize_t nwritten = write(rs->socket_fd, rs->write_msg->buffer, rs->write_msg->size - rs->write_msg_nwritten);
 	if (nwritten < 1) {
-		rs->connection_is_open = 0;
+		rs->socket_fd = -1;
 		return;
 	}
 
 	rs->write_msg_nwritten += nwritten;
 
-	if (rs->write_msg.size == rs->write_msg_nwritten) {
+	if (rs->write_msg->size == rs->write_msg_nwritten) {
 		rs->write_msg_nwritten = 0;
-		message_reset(&rs->write_msg);
+		msg_reset(rs->write_msg);
 		rs->write_msg_loaded = 0;
 	}
 
@@ -1484,7 +1523,8 @@ void poll_socket(struct rstate *rs)
 	} else if (rc == 1) {
 		if (pollfd.revents & (POLLHUP | POLLNVAL)) {
 			printf("POLLHUP\n");
-			rs->connection_is_open = 0;
+			close(rs->socket_fd);
+			rs->socket_fd = -1;
 			return;
 		}
 		if (pollfd.revents & POLLRDNORM) {
@@ -1493,7 +1533,7 @@ void poll_socket(struct rstate *rs)
 			rs->socket_readable = 1;
 		}
 		if (pollfd.revents & POLLWRNORM) {
-			printf("POLWRNORM\n");
+			printf("POLLWRNORM\n");
 			rs->socket_writable = 1;
 		}
 	}
@@ -1503,10 +1543,14 @@ void replicator_iteration(struct rstate *rs)
 {
 	printf("\n\n\nIteration\n");
 	print_rstate(rs);
-	
-	if (!rs->connection_is_open) {
+
+	if (rs->socket_fd == -1 && rs->connector) {
 		printf("connect to remote\n");
 		connect_to_remote(rs);
+	} else if (rs->socket_fd == -1) {
+		printf("acceptor exits\n");
+		rstate_free(rs);
+		pthread_exit(NULL);
 	} else if (!rs->node_msg_sent) {
 		printf("send_node_msg\n");
 		send_node_msg(rs);
@@ -1530,5 +1574,27 @@ void replicator_iteration(struct rstate *rs)
 		poll_socket(rs);
 	}
 
-	sleep(1);
+	sleep(5);
+}
+
+/* The replicator thread start routine */
+void *replicator_loop(void *arg)
+{
+	struct rstate *rs = (struct rstate*) arg;
+
+	for (;;) {
+
+			/* printf("rs->socket_fd = %d\n", rs->socket_fd); */
+			/* if (rs->socket_fd != -1) { */
+				/* close(rs->socket_fd); */
+				/* rs->socket_fd = -1; */
+			/* } */
+			/* /\* if (!rs->connect_node || (rs->node_msg_received && !rs->remote_node)) { *\/ */
+			/* 	rstate_free(rs); */
+			/* 	printf("Terminate thread\n"); */
+			/* 	return NULL; */
+			/* } */
+		/* } */
+		replicator_iteration(rs);
+	}
 }
