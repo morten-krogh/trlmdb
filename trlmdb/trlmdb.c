@@ -12,7 +12,7 @@
 #include <pthread.h>
 #include <poll.h>
 
-#include "trlmdb.h"
+//#include "trlmdb.h"
 
 #define DB_TIME_TO_KEY "db_time_to_key"
 #define DB_TIME_TO_DATA "db_time_to_data"
@@ -21,30 +21,6 @@
 #define DB_NODE_TIME "db_node_time"
 
 /* Structs */
-
-struct TRLMDB_env {
-	MDB_env *mdb_env;
-	MDB_dbi dbi_time_to_key;
-	MDB_dbi dbi_time_to_data;
-	MDB_dbi dbi_key_to_time;
-	MDB_dbi dbi_nodes;
-	MDB_dbi dbi_node_time;
-	uint8_t time_component[4];
-};
-
-struct TRLMDB_txn {
-	MDB_txn *mdb_txn;
-	TRLMDB_env *env;
-	unsigned int flags;
-	uint8_t time[12];
-	uint64_t counter;
-	TRLMDB_txn *parent;
-};
-
-struct TRLMDB_cursor {
-	TRLMDB_txn *txn;
-	MDB_cursor *mdb_cursor;
-};
 
 struct conf_info {
 	char *database;
@@ -95,6 +71,29 @@ struct rstate {
 	int end_of_write_loop;
 	int socket_readable;
 	int socket_writable;
+};
+
+struct TRLMDB_env {
+	MDB_env *mdb_env;
+	uint8_t time_id[4];
+	MDB_dbi dbi_time_to_key;
+	MDB_dbi dbi_time_to_data;
+	MDB_dbi dbi_key_to_time;
+	MDB_dbi dbi_nodes;
+	MDB_dbi dbi_node_time;
+};
+
+struct TRLMDB_txn {
+	MDB_txn *mdb_txn;
+	TRLMDB_env *env;
+	TRLMDB_txn *parent;
+	unsigned int flags;
+	struct time time;
+};
+
+struct TRLMDB_cursor {
+	TRLMDB_txn *txn;
+	MDB_cursor *mdb_cursor;
 };
 
 /* Logging and printing */
@@ -709,32 +708,31 @@ void write_node_name(struct message *msg, const char *node_name)
 	msg_append(msg, (uint8_t*)node_name, strlen(node_name));
 }
 
+/* The trlmdb functions. trlmdb is a wrapper around the lmdb functions. trlmdb contrls the lmdb
+ * database, and all dataase access should go throught these functions.
+ */  
+
+int trlmdb_env_create(TRLMDB_env **env)
+{
+	TRLMDB_env *db_env = calloc(1, sizeof *db_env);
+	if (!db_env) return ENOMEM;
+
+	uint32_t random = arc4random();
+	encode_uint32(db_env->time_component, random);
+	
+	int rc = mdb_env_create(&(db_env->mdb_env));
+	if (rc) free(db_env);
+
+	mdb_env_set_maxdbs(db_env->mdb_env, 5);
+	
+	*env = db_env;
+	return rc;
+}
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/* Managing the lmdb environment with the special databases */  
 
 static int trlmdb_node_put_time_all_nodes(TRLMDB_txn *txn, uint8_t *time)
 {
@@ -765,23 +763,6 @@ cleanup_node_time:
 	free(node_time);
 
 	return rc == MDB_NOTFOUND ? 0 : rc;
-}
-
-int trlmdb_env_create(TRLMDB_env **env)
-{
-	TRLMDB_env *db_env = calloc(1, sizeof *db_env);
-	if (!db_env) return ENOMEM;
-
-	uint32_t random = arc4random();
-	encode_uint32(db_env->time_component, random);
-	
-	int rc = mdb_env_create(&(db_env->mdb_env));
-	if (rc) free(db_env);
-
-	mdb_env_set_maxdbs(db_env->mdb_env, 5);
-	
-	*env = db_env;
-	return rc;
 }
 
 int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
