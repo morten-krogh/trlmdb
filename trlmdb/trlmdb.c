@@ -563,6 +563,120 @@ uint8_t *encode_node_time(char *node, uint8_t *time)
 	return node_time;
 }
 
+/* Network code */
+
+/* create_listener returns a valid fd. It exists if there are errors. */
+int create_listener(const char *hostname, const char *servname)
+{
+	struct addrinfo hints = {0};
+
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = PF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+
+	struct addrinfo *res;
+	int status = getaddrinfo(hostname, servname, &hints, &res);
+	if (status)
+		log_fatal_err("getaddrinfo error: %s\n", gai_strerror(status));
+
+	int listen_fd = -1;
+	struct addrinfo *addrinfo;
+	for (addrinfo = res; addrinfo != NULL; addrinfo = addrinfo->ai_next) {
+		listen_fd = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol);
+		if (listen_fd == -1)
+			continue;
+
+		int socket_option_value = 1;
+		setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &socket_option_value, sizeof(int));
+		
+		if (bind(listen_fd, addrinfo->ai_addr, addrinfo->ai_addrlen) == -1)
+			log_fatal_err("bind error: %s\n", strerror(errno));
+
+		break;
+	}
+
+	if (addrinfo == NULL) {
+		fprintf(stderr, "Check that the host and port are correct, that the port is not used by another process and that the process has the right permission\n");
+		return -1;
+	}
+
+	freeaddrinfo(res);
+	
+	int backlog = 20;
+	if (listen(listen_fd, backlog) == -1)
+		log_fatal_err("listen error: %s\n", strerror(errno));
+
+	return listen_fd;
+}
+
+void accept_loop(int listen_fd, TRLMDB_env *env, struct conf_info *conf_info, void *(*handler)(void*))
+{
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	for (;;) {
+		struct sockaddr_storage remote_addr;
+		socklen_t remote_addr_len = sizeof remote_addr;
+
+		printf("ready to accept\n");
+		int accepted_fd = accept(listen_fd, (struct sockaddr *) &remote_addr, &remote_addr_len);
+		printf("accepted = %d\n", accepted_fd);
+		if (accepted_fd == -1) continue;
+
+		int on = 1;
+		setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+		
+		struct rstate *rs = rstate_alloc_init(env, conf_info, 0);
+		rs->socket_fd = accepted_fd;
+		
+		pthread_t thread;
+		if (pthread_create(&thread, &attr,handler, rs))
+			log_fatal_err("error creatng a new thread\n");
+	}
+}
+
+int create_connection(const char *hostname, const char *servname)
+{
+	struct addrinfo hints = {0};
+
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = PF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+
+	struct addrinfo *res;
+	int rc;
+
+	printf("hostname = %s, servname = %s\n", hostname, servname);
+	
+	if ((rc = getaddrinfo(hostname, servname, &hints, &res))) {
+		log_stderr("getaddrinfo error: %s\n", gai_strerror(rc));
+		return -1;
+	}
+
+	int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+	if (socket_fd == -1) {
+		freeaddrinfo(res);
+		return -1;
+	}
+
+	int on = 1;
+	setsockopt(socket_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+	
+	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
+	if (rc == -1) {
+		freeaddrinfo(res);
+		log_stderr("connect error to %s:%s. Trying again later\n", hostname, servname);
+		return -1;
+	}
+
+	printf("connected to %s:%s\n", hostname, servname);
+
+	freeaddrinfo(res);
+	
+	return socket_fd;
+}
+
 /* node name message */
 char *read_node_name(struct message *msg)
 {
@@ -594,9 +708,6 @@ void write_node_name(struct message *msg, const char *node_name)
 	msg_append(msg, (uint8_t*) "node", 4); 
 	msg_append(msg, (uint8_t*)node_name, strlen(node_name));
 }
-
-
-
 
 
 
@@ -1141,140 +1252,8 @@ int write_time_message(TRLMDB_txn *txn, uint8_t *time, char *node, struct messag
 }
 
 
-
-/* Network code */
-
-int create_listener(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
-{
-	struct addrinfo hints = {0};
-
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_family = ai_family;
-	hints.ai_socktype = SOCK_STREAM;
-
-	struct addrinfo *res;
-	int status;
-	
-	if ((status = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
-		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-		return -1;
-	}
-
-	int listen_fd = -1;
-	struct addrinfo *addrinfo;
-	for (addrinfo = res; addrinfo != NULL; addrinfo = addrinfo->ai_next) {
-		if ((listen_fd = socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol)) == -1) {
-			perror("socket: ");
-			continue;
-		}
-
-		int socket_option_value = 1;
-		setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &socket_option_value, sizeof(int));
-		
-		if (bind(listen_fd, addrinfo->ai_addr, addrinfo->ai_addrlen) == -1) {
-			close(listen_fd);
-			perror("bind: ");
-			continue;
-		}
-
-		break;
-	}
-
-	if (addrinfo == NULL) {
-		fprintf(stderr, "Check that the host and port are correct, that the port is not used by another process and that the process has the right permission\n");
-		return -1;
-	}
-
-	if (socket_addr != NULL) {
-		*socket_addr = *addrinfo->ai_addr;
-	}
-
-	freeaddrinfo(res);
-	
-	int backlog = 20;
-	if (listen(listen_fd, backlog) == -1) {
-		perror("Error in listen(): ");
-		return -1;
-	}
-
-	return listen_fd;
-}
-
-void *replicator_loop(void *arg);
-
-void accept_loop(int listen_fd, TRLMDB_env *env, struct conf_info *conf_info)
-{
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	for (;;) {
-		struct sockaddr_storage remote_addr;
-		socklen_t remote_addr_len = sizeof remote_addr;
-
-		printf("ready to accept\n");
-		int accepted_fd = accept(listen_fd, (struct sockaddr *) &remote_addr, &remote_addr_len);
-		printf("accepted = %d\n", accepted_fd);
-		if (accepted_fd == -1) continue;
-
-		int on = 1;
-		int rc = setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
-		
-		struct rstate *rs = rstate_alloc_init(env, conf_info, 0);
-		if(!rs) continue;
-		rs->socket_fd = accepted_fd;
-		
-		pthread_t thread;
-		if (pthread_create(&thread, &attr, replicator_loop, rs) != 0) {
-			printf("error creating thread\n");
-			close(accepted_fd);
-			rstate_free(rs);
-		}
-	}
-}
-
-int create_connection(const int ai_family, const char *hostname, const char *servname, struct sockaddr *socket_addr)
-{
-	struct addrinfo hints = {0};
-
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_family = ai_family;
-	hints.ai_socktype = SOCK_STREAM;
-
-	struct addrinfo *res;
-	int rc;
-
-	printf("hostname = %s, servname = %s\n", hostname, servname);
-	
-	if ((rc = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
-		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(rc));
-		return -1;
-	}
-
-	int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (socket_fd == -1) {
-		freeaddrinfo(res);
-		return -1;
-	}
-
-	int on = 1;
-	rc = setsockopt(socket_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
-	
-	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
-	if (rc == -1) {
-		freeaddrinfo(res);
-		fprintf(stderr, "connect error to %s:%s. Trying again later\n", hostname, servname);
-		return -1;
-	}
-
-	printf("connected to %s:%s\n", hostname, servname);
-
-	freeaddrinfo(res);
-	
-	return socket_fd;
-}
-
 /* The replicator server */
+void *replicator_loop(void *arg);
 
 void replicator(struct conf_info *conf_info)
 {
@@ -1361,8 +1340,8 @@ void replicator(struct conf_info *conf_info)
 	}
 	
 	if (conf_info->port) {
-		int listen_fd = create_listener(PF_INET, "localhost", conf_info->port, NULL);
-		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info);
+		int listen_fd = create_listener("localhost", conf_info->port);
+		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info, replicator_loop);
 	}
 
 	for (int i = 0; i < conf_info->nconnect; i++) {
@@ -1375,7 +1354,7 @@ void connect_to_remote(struct rstate *rs)
 	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
 	
-	rs->socket_fd = create_connection(PF_INET, rs->connect_hostname, rs->connect_servname, NULL);
+	rs->socket_fd = create_connection(rs->connect_hostname, rs->connect_servname);
 	printf("socket_fd = %d\n", rs->socket_fd); 
 	
 	if (rs->socket_fd == -1) {
