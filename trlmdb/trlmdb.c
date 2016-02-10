@@ -442,7 +442,7 @@ int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *
 		remaining -= 8 + length;
 		buf += 8 + length;
 	}	
-	return 1;
+	return ENOENT;
 }
 
 /* replicator state */
@@ -671,7 +671,7 @@ int create_connection(const char *hostname, const char *servname)
 	return socket_fd;
 }
 
-/* node name message */
+/* node message */
 char *read_node(struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
@@ -1103,67 +1103,68 @@ int trlmdb_node_exists(struct trlmdb_env *env, char *node)
 
 	MDB_txn *txn;
 	int rc = mdb_txn_begin(env->mdb_env, NULL, MDB_RDONLY, &txn);
-	if (rc) return -1;
+	if (rc)
+		return -1;
 
-	int found = mdb_get(txn, env->dbi_nodes, &key, &data);
+	rc = mdb_get(txn, env->dbi_nodes, &key, &data);
 
 	mdb_txn_commit(txn);
 
-	return found == MDB_NOTFOUND ? 0 : 1;
+	return rc == MDB_NOTFOUND ? 0 : 1;
 }
 
-int trlmdb_get_key(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
+int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 {
 	MDB_val time_val = {20, time};
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
 }
 
-
 /* time message */
 
+/* read_time_msg reads the msg, verifies that it is a time msg, and inserts the information in the database */
 int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
-	if (count < 3 || count > 5) return 1;
+	if (count < 3 || count > 5)
+		return EINVAL;
 
 	uint8_t *data;
 	uint64_t size;
 	
-	int rc = msg_get_elem(msg, 0, &data, &size);
-	if (rc) return 1;
+	msg_get_elem(msg, 0, &data, &size);
 
-	if (size != 4 || memcmp(data, "time", 4) != 0) return 1;
+	if (size != 4 || memcmp(data, "time", 4) != 0)
+		return EINVAL;
 
 	uint8_t *flag;
-	rc = msg_get_elem(msg, 1, &flag, &size);
-	if (rc) return 1;
-	if (size != 2) return 1;
-	if (flag[0] != 't' && flag[0] != 'f') return 1;
-	if (flag[1] != 't' && flag[1] != 'f') return 1;
+	msg_get_elem(msg, 1, &flag, &size);
+	if (size != 2 || (flag[0] != 't' && flag[0] != 'f') || (flag[1] != 't' && flag[1] != 'f'))
+		return EINVAL;
 	
 	uint8_t *time;
-	
-	rc = msg_get_elem(msg, 2, &time, &size);
-	if (rc || size != 20) return 1;
+	msg_get_elem(msg, 2, &time, &size);
+	if (size != 20)
+		return EINVAL;
 
 	int is_put = time_is_put(time);
 	
 	MDB_val key;
-	int key_absent = trlmdb_get_key(txn, time, &key);
+	int key_absent = trlmdb_get_key_for_time(txn, time, &key);
 	
-	if (key_absent && count > 3) {
+	if (key_absent) {
+		if (count < 4)
+			return EINVAL;
+
 		uint8_t *key;
 		uint64_t key_size;
-		rc = msg_get_elem(msg, 3, &key, &key_size); 
-		if (rc) return 1;
-
+		msg_get_elem(msg, 3, &key, &key_size); 
 		MDB_val key_val = {key_size, key};
-		
+
 		if (is_put && count == 5) {
 			uint8_t *data;
 			uint64_t data_size;
-			rc = msg_get_elem(msg, 4, &data, &data_size); 
-			if (rc) return 1;
+			msg_get_elem(msg, 4, &data, &data_size); 
+
 			MDB_val data_val = {data_size, data};
 			trlmdb_insert_time_key_data(txn->env, txn->mdb_txn, time, &key_val, &data_val);
 		} else {
