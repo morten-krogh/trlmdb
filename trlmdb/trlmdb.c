@@ -79,7 +79,7 @@ struct rstate {
 	char *connect_servname;
 	int naccept;
 	char **accept_node;
-	int node_msg_sent;
+	int node_msg_loaded;
 	int node_msg_received;
 	char *remote_node;
 	uint8_t *read_buf;
@@ -183,7 +183,7 @@ void print_rstate(struct rstate *rs)
 	for (int i = 0; i < rs->naccept; i++) {
 		printf("accept_node = %s\n", rs->accept_node[i]);
 	}
-	printf("node_msg_sent = %d\n", rs->node_msg_sent);
+	printf("node_msg_loaded = %d\n", rs->node_msg_loaded);
 	printf("node_msg_received = %d\n", rs->node_msg_received);
 	printf("remote_node = %s\n", rs->remote_node);
 	printf("read_buf_size = %llu\n", rs->read_buf_size);
@@ -674,18 +674,17 @@ int create_connection(const char *hostname, const char *servname)
 char *read_node(struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
-	if (count != 2) return NULL;
+	if (count != 2)
+		return NULL;
 
 	uint8_t *data;
 	uint64_t size;
 	
-	int rc = msg_get_elem(msg, 0, &data, & size);
-	if (rc) return NULL;
+	msg_get_elem(msg, 0, &data, &size);
+	if (size != 4 || memcmp(data, "node", 4) != 0)
+		return NULL;
 
-	if (size != 4 || memcmp(data, "node", 4) != 0) return NULL;
-
-	rc = msg_get_elem(msg, 1, &data, &size);
-	if (rc) return NULL;
+	msg_get_elem(msg, 1, &data, &size);
 
 	char *node = tr_malloc(size + 1);
 
@@ -1344,80 +1343,54 @@ void replicator(struct conf_info *conf_info)
 	}
 }
 
+/* event handlers in the replicator loop */
+
 void connect_to_remote(struct rstate *rs)
 {
-	rs->node_msg_sent = 0;
+	rs->node_msg_loaded = 0;
 	rs->node_msg_received = 0;
+	rs->connect_now = 0;
+	rs->write_msg_loaded = 0;
+	rs->read_buf_size = 0;
+	rs->read_buf_loaded = 0;
 	
 	rs->socket_fd = create_connection(rs->connect_hostname, rs->connect_servname);
 	printf("socket_fd = %d\n", rs->socket_fd); 
 	
-	if (rs->socket_fd == -1) {
+	if (rs->socket_fd == -1)
 		printf("Connection could not be created\n");
-		sleep(100);
-	}
 }
 
-void send_node_msg(struct rstate *rs)
+void load_node_msg(struct rstate *rs)
 {
 	struct message *msg = rs->write_msg;
 	
-	write_node(msg, rs->node);
+	write_node(rs->write_msg, rs->node);
 
-	uint64_t nwritten = 0;
-	while (nwritten < msg->size) {
-		ssize_t nbytes = write(rs->socket_fd, msg->buf + nwritten, msg->size - nwritten);
-		if (nbytes > 0) {
-			nwritten += nbytes;
-		} else {
-			rs->socket_fd = -1;
-			return;
-		}
-	}
-
-	rs->node_msg_sent = 1;
-	msg_reset(rs->write_msg);
+	rs->node_msg_loaded = 1;
+	rs->write_msg_loaded = 1;
 }
 
-void receive_node_msg(struct rstate *rs)
+void read_node_msg_from_buf(struct rstate *rs)
 {
-	struct message *msg = NULL;
-
-	while (!msg) {
-		if (rs->read_buf_size == rs->read_buf_cap) {
-			uint8_t *realloced = (uint8_t*) realloc(rs->read_buf, 2 * rs->read_buf_cap);
-			if (!realloced) {
-				rs->socket_fd = -1;
-				return;
-			}
-			rs->read_buf = realloced;
-			rs->read_buf_cap *= 2;
-		}
-		ssize_t nread = read(rs->socket_fd, rs->read_buf + rs->read_buf_size, rs->read_buf_cap - rs->read_buf_size);
-		if (nread < 1) {
-			rs->socket_fd = -1;
-			return;
-		}
-		rs->read_buf_size += nread;
-
-		msg = msg_from_buf(rs->read_buf, rs->read_buf_size);
+	struct message *msg = msg_from_buf(rs->read_buf, rs->read_buf_size);
+	if (!msg) {
+		rs->read_buf_loaded = 0;
+		return;
 	}
 
 	memmove(rs->read_buf, rs->read_buf + msg->size, rs->read_buf_size - msg->size);
 	rs->read_buf_size -= msg->size;
+	rs->read_buf_loaded = rs->read_buf_size > 0;
 
 	char *remote_node = read_node(msg);
+	if (!remote_node)
+		return;
 
-	
-	printf("hello\n");
-	print_message(msg);
-	printf("%s\n", remote_node);
-	printf("hello\n");
-	
 	int acceptable = 0;
-	if (rs->connect_node) {
-		if (rs->connect_node && strcmp(rs->connect_node, remote_node) == 0) acceptable = 1;
-	} else {
+	if (rs->connect_node && strcmp(rs->connect_node, remote_node) == 0) {
+		acceptable = 1;
+	} else if (!rs->connect_node) {
 		for (int i = 0; i < rs->naccept; i++) {
 			if (strcmp(remote_node, rs->accept_node[i]) == 0) {
 				acceptable = 1;
@@ -1425,18 +1398,16 @@ void receive_node_msg(struct rstate *rs)
 			}
 		}
 	}
-
-	rs->node_msg_received = 1;
 	
 	if (acceptable) {
+		rs->node_msg_received = 1;
 		rs->remote_node = remote_node;
 	} else {
-		rs->socket_fd = -1;
-		fprintf(stderr, "The remote node name is not acceptable\n");
+		log_fatal_err("The remote node name is not acceptable\n");
 	}
 }
 
-void read_messages_from_buf(struct rstate *rs)
+void read_time_msg_from_buf(struct rstate *rs)
 {
 	struct message *msg;
 	uint64_t msg_index = 0;
@@ -1575,15 +1546,15 @@ void replicator_iteration(struct rstate *rs)
 		printf("acceptor exits\n");
 		rstate_free(rs);
 		pthread_exit(NULL);
-	} else if (!rs->node_msg_sent) {
-		printf("send_node_msg\n");
-		send_node_msg(rs);
-	} else if (!rs->node_msg_received) {
-		printf("receive_node_msg\n");
-		receive_node_msg(rs);
+	} else if (!rs->node_msg_loaded) {
+		printf("load_node_msg\n");
+		load_node_msg(rs);
+	} else if (rs->read_buf_loaded && rs->node_msg_received) {
+		printf("Read node message from buffer\n");
+		read_node_msg_from_buf(rs);
 	} else if (rs->read_buf_loaded) {
-		printf("Read messages from buffer\n");
-		read_messages_from_buf(rs);
+		printf("Read time message from buffer\n");
+		read_time_msg_from_buf(rs);
 	} else if (rs->socket_readable) {
 		printf("Read from socket\n");
 		read_from_socket(rs);
@@ -1607,18 +1578,6 @@ void *replicator_loop(void *arg)
 	struct rstate *rs = (struct rstate*) arg;
 
 	for (;;) {
-
-			/* printf("rs->socket_fd = %d\n", rs->socket_fd); */
-			/* if (rs->socket_fd != -1) { */
-				/* close(rs->socket_fd); */
-				/* rs->socket_fd = -1; */
-			/* } */
-			/* /\* if (!rs->connect_node || (rs->node_msg_received && !rs->remote_node)) { *\/ */
-			/* 	rstate_free(rs); */
-			/* 	printf("Terminate thread\n"); */
-			/* 	return NULL; */
-			/* } */
-		/* } */
 		replicator_iteration(rs);
 	}
 }
