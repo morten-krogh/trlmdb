@@ -2,4 +2,4 @@ node = node-1
 database = trlmdb-1
 port = 8001
 accept = node-2
-accept = node-3
+// accept = node-3

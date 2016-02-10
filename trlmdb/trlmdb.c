@@ -147,6 +147,17 @@ void print_buf(uint8_t *buf, uint64_t size)
 	printf("\n");
 }
 
+uint8_t *encode_time(struct time *time, int is_put);
+void print_struct_time(struct time *time)
+{
+	uint8_t *encoded_time = encode_time(time, 0);
+	printf("encoded time = ");
+	for (size_t i = 0; i < 20; i++) {
+		printf("%02x", encoded_time[i]);
+	}
+	printf("\n");
+}
+
 void print_mdb_val(MDB_val *val)
 {
 	printf("size = %zu, data = ", val->mv_size);
@@ -519,7 +530,7 @@ struct time *time_prepare(struct time *time)
 	return time;
 }
 
-uint8_t *time_encode(struct time *time, int is_put)
+uint8_t *encode_time(struct time *time, int is_put)
 {
 	uint8_t *encoded = malloc(20);
 	if (!encoded)
@@ -530,7 +541,7 @@ uint8_t *time_encode(struct time *time, int is_put)
 	memcpy(encoded + 8, time->id, 4);
 
 	uint64_t counter = time->counter + (is_put ? 1 : 0);
-	encode_uint64(encoded, counter);
+	encode_uint64(encoded + 12, counter);
 	
 	return encoded;
 }
@@ -796,7 +807,7 @@ int trlmdb_txn_begin(struct trlmdb_env *env, unsigned int flags, struct trlmdb_t
 	memcpy((*txn)->time->id, env->time_id, 4);
 	time_gettimeofday((*txn)->time);
 	(*txn)->time->counter = 0;
-	
+
 	int rc = mdb_txn_begin(env->mdb_env, NULL, flags, &((*txn)->mdb_txn));
 	if (rc) {
 		free((*txn)->time);
@@ -806,7 +817,7 @@ int trlmdb_txn_begin(struct trlmdb_env *env, unsigned int flags, struct trlmdb_t
 	return rc;
 }
 
-int  trlmdb_txn_commit(struct trlmdb_txn *txn)
+int trlmdb_txn_commit(struct trlmdb_txn *txn)
 {
 	int rc = 0;
 
@@ -913,7 +924,7 @@ int trlmdb_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 static int trlmdb_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	int is_put = data != NULL;
-	uint8_t *time = time_encode(txn->time, is_put);
+	uint8_t *time = encode_time(txn->time, is_put);
 	if (!time)
 		return ENOMEM;
 	

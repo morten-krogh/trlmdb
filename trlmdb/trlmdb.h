@@ -3,41 +3,33 @@
 
 #include "lmdb.h"
 
-typedef struct TRLMDB_env TRLMDB_env;
-typedef struct TRLMDB_txn TRLMDB_txn;
-typedef struct TRLMDB_dbi TRLMDB_dbi;
-typedef struct TRLMDB_cursor TRLMDB_cursor;
+typedef struct trlmdb_env trlmdb_env;
+typedef struct trlmdb_txn trlmdb_txn;
+typedef struct trlmdb_cursor trlmdb_cursor;
 
-int trlmdb_env_create(TRLMDB_env **env);
-int trlmdb_env_open(TRLMDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode);
-void trlmdb_env_close(TRLMDB_env *env);
-MDB_env *trlmdb_mdb_env(TRLMDB_env *env);
+int trlmdb_env_create(trlmdb_env **env);
+int trlmdb_env_open(trlmdb_env *env, const char *path, unsigned int flags, mdb_mode_t mode);
+void trlmdb_env_close(trlmdb_env *env);
+MDB_env *trlmdb_mdb_env(trlmdb_env *env);
 
-int trlmdb_txn_begin(TRLMDB_env *env, TRLMDB_txn *parent, unsigned int flags, TRLMDB_txn **txn); 
-int  trlmdb_txn_commit(TRLMDB_txn *txn);
-void trlmdb_txn_abort(TRLMDB_txn *txn);
-MDB_txn *trlmdb_mdb_txn(TRLMDB_txn *txn);
+int trlmdb_txn_begin(trlmdb_env *env, unsigned int flags, trlmdb_txn **txn); 
+int  trlmdb_txn_commit(trlmdb_txn *txn);
+void trlmdb_txn_abort(trlmdb_txn *txn);
+MDB_txn *trlmdb_mdb_txn(trlmdb_txn *txn);
 
-int trlmdb_dbi_open(TRLMDB_txn *txn, const char *name, unsigned int flags, TRLMDB_dbi **dbi);
-MDB_dbi trlmdb_mdb_dbi(TRLMDB_dbi *dbi);
+int trlmdb_get(trlmdb_txn *txn, MDB_val *key, MDB_val *data);
+int trlmdb_put(trlmdb_txn *txn, MDB_val *key, MDB_val *data);
+int trlmdb_del(trlmdb_txn *txn, MDB_val *key);
 
-int trlmdb_get(TRLMDB_txn *txn, MDB_val *key, MDB_val *data);
-int trlmdb_put(TRLMDB_txn *txn, MDB_val *key, MDB_val *data);
-int trlmdb_del(TRLMDB_txn *txn, MDB_val *key);
+int trlmdb_cursor_open(trlmdb_txn *txn, trlmdb_cursor **cursor);
+void trlmdb_cursor_close(trlmdb_cursor *cursor);
+int trlmdb_cursor_get_first(trlmdb_cursor *cursor, MDB_val *key, MDB_val *data);
+int trlmdb_cursor_get_next(trlmdb_cursor *cursor, MDB_val *key, MDB_val *data);	
 
-int trlmdb_cursor_open(TRLMDB_txn *txn, TRLMDB_cursor **cursor);
-void trlmdb_cursor_close(TRLMDB_cursor *cursor);
-int  trlmdb_cursor_get(TRLMDB_cursor *cursor, MDB_val *key, MDB_val *data, int *is_deleted, MDB_cursor_op op);
-
-int trlmdb_node_add(TRLMDB_txn *txn, char *node_name);
-int trlmdb_node_del(TRLMDB_txn *txn, char *node_name);
-int trlmdb_node_remove_time(TRLMDB_txn *txn, char *node_name, uint8_t *time);	
-int trlmdb_node_time_update(TRLMDB_txn *txn, char *node_name, uint8_t *time, uint8_t* flag);
+int trlmdb_node_add(trlmdb_txn *txn, char *node);
+int trlmdb_node_del(trlmdb_txn *txn, char *node);
 
 void print_mdb_val(MDB_val *val);
-
-int trlmdb_get_key(TRLMDB_txn *txn, uint8_t *time, MDB_val *key);
-int trlmdb_is_put_op(uint8_t *time);
 
 
 #endif
