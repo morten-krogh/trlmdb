@@ -79,7 +79,7 @@ struct rstate {
 	char *connect_servname;
 	int naccept;
 	char **accept_node;
-	int node_msg_loaded;
+	int node_msg_sent;
 	int node_msg_received;
 	char *remote_node;
 	uint8_t *read_buf;
@@ -183,7 +183,7 @@ void print_rstate(struct rstate *rs)
 	for (int i = 0; i < rs->naccept; i++) {
 		printf("accept_node = %s\n", rs->accept_node[i]);
 	}
-	printf("node_msg_loaded = %d\n", rs->node_msg_loaded);
+	printf("node_msg_sent = %d\n", rs->node_msg_sent);
 	printf("node_msg_received = %d\n", rs->node_msg_received);
 	printf("remote_node = %s\n", rs->remote_node);
 	printf("read_buf_size = %llu\n", rs->read_buf_size);
@@ -1173,44 +1173,29 @@ int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg
 	return trlmdb_node_time_update(txn, remote_node, time, flag);	
 }
 
-/* write_time_message reads from the database and writes a new message that can be sent on the network
+/* load_time_message reads from the database and writes a new message that can be sent on the network
  * It finds the next time to send to node.
- * It returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
-int write_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
+ * It returns 0 if a msg is loaded, MDB_NOTFOUND if time is the last entry in node_time for that node 
+ * and ENOMEM if there was a memory problem.
+ */ 
+int load_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
-	printf("write_time_message\n");
-	
 	size_t node_len = strlen(node);
 
-	printf("hi2\n");
-	
-
-	
 	uint8_t *node_time = encode_node_time(node, node_len, time);
 	if (!node_time)
 		return ENOMEM;
 
-		printf("hi2\n");
-	
-
 	MDB_val node_time_val = {node_len + 20, node_time};
 	MDB_cursor *cursor;
-	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_node_time, &cursor);
-	if (rc) {
-		free(node_time);
-		return rc;
-	}
-	printf("hi2\n");
-	
-	
+        mdb_cursor_open(txn->mdb_txn, txn->env->dbi_node_time, &cursor);
+
 	MDB_val flag_val;
-	rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
+	int rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
 	if (rc) {
 		free(node_time);
 		return rc;
 	}
-	printf("hi2\n");
-	
 
 	if (node_time_val.mv_size == node_len + 20 && memcmp(node_time_val.mv_data, node_time, node_len + 20) == 0) {
 		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
@@ -1263,6 +1248,8 @@ int write_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct mes
 				return rc;
 
 			rc = msg_append(msg, (uint8_t*)data.mv_data, data.mv_size);
+			if (rc)
+				return rc;
 		}
 	}
 
@@ -1362,7 +1349,7 @@ void replicator(struct conf_info *conf_info)
 
 void connect_to_remote(struct rstate *rs)
 {
-	rs->node_msg_loaded = 0;
+	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
 	rs->connect_now = 0;
 	rs->write_msg_loaded = 0;
@@ -1372,13 +1359,13 @@ void connect_to_remote(struct rstate *rs)
 	rs->socket_fd = create_connection(rs->connect_hostname, rs->connect_servname);
 }
 
-void load_node_msg(struct rstate *rs)
+void send_node_msg(struct rstate *rs)
 {
 	struct message *msg = rs->write_msg;
 	
 	write_node(rs->write_msg, rs->node);
 
-	rs->node_msg_loaded = 1;
+	rs->node_msg_sent = 1;
 	rs->write_msg_loaded = 1;
 }
 
@@ -1472,20 +1459,18 @@ void load_write_msg(struct rstate *rs)
 	if (rc)
 		log_mdb_err(rc);
 
-	rc = write_time_msg(txn, rs->write_time, rs->remote_node, rs->write_msg);
-	printf("hi3\n");
-	if (rc)
+	rc = load_time_msg(txn, rs->write_time, rs->remote_node, rs->write_msg);
+	if (rc == ENOMEM)
 		log_mdb_err(rc);
 	
-	if (rc == 0) {
+	if (rc == 0)
 		rs->write_msg_loaded = 1;
-	} else if (rc == MDB_NOTFOUND) {
+
+	if (rc == MDB_NOTFOUND) {
 		rs->write_msg_loaded = 0;
 		rs->end_of_write_loop = 1;
 		memset(rs->write_time, 0, 20);
 	}
-
-	printf("hi4\n");
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc)
@@ -1513,7 +1498,7 @@ void write_to_socket(struct rstate *rs)
 
 void poll_socket(struct rstate *rs)
 {
-	int timeout = 1;
+	int timeout = 10000; /* milliseconds */
 	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
@@ -1548,9 +1533,6 @@ void poll_socket(struct rstate *rs)
 void replicator_iteration(struct rstate *rs)
 {
 	printf("\n\n\nIteration\n");
-	print_rstate(rs);
-
-	printf("\n\n\n\n");
 	
 	if (rs->socket_fd == -1 && rs->connect_node && rs->connect_now) {
 		printf("connect to remote\n");
@@ -1563,10 +1545,10 @@ void replicator_iteration(struct rstate *rs)
 		printf("acceptor exits\n");
 		rstate_free(rs);
 		pthread_exit(NULL);
-	} else if (!rs->node_msg_loaded) {
-		printf("load_node_msg\n");
-		load_node_msg(rs);
-	} else if (rs->read_buf_loaded && rs->node_msg_received) {
+	} else if (!rs->node_msg_sent) {
+		printf("send_node_msg\n");
+		send_node_msg(rs);
+	} else if (rs->read_buf_loaded && !rs->node_msg_received) {
 		printf("Read node message from buffer\n");
 		read_node_msg_from_buf(rs);
 	} else if (rs->read_buf_loaded) {
