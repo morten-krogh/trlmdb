@@ -72,8 +72,8 @@ struct trlmdb_cursor {
 struct rstate {
 	char *node;
 	struct trlmdb_env *env;
-	int connector;
 	int socket_fd;
+	int connect_now;
 	char *connect_node;
 	char *connect_hostname;
 	char *connect_servname;
@@ -174,8 +174,8 @@ void print_message(struct message *msg)
 void print_rstate(struct rstate *rs)
 {
 	printf("node = %s\n", rs->node);
-	printf("connector = %d\n", rs->connector);
 	printf("socket_fd = %d\n", rs->socket_fd);
+	printf("connect_now = %d\n", rs->connect_now);
 	printf("connect_node = %s\n", rs->connect_node);
 	printf("connect_hostname = %s\n", rs->connect_hostname);
 	printf("connect_servname = %s\n", rs->connect_servname);
@@ -442,19 +442,18 @@ int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *
 		remaining -= 8 + length;
 		buf += 8 + length;
 	}	
-	return ENOENT;
+	return MDB_NOTFOUND;
 }
 
 /* replicator state */
 
-struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_info, int connector)
+struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_info)
 {
 	struct rstate *rs = tr_malloc(sizeof *rs);
 	*rs = (struct rstate) {0};
 	
 	rs->node = conf_info->node;
 	rs->env = env;
-	rs->connector = connector;
 	rs->socket_fd = -1;
 	rs->naccept = conf_info->naccept;
 	rs->accept_node = conf_info->accept_node;
@@ -621,7 +620,7 @@ void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info *conf_i
 		int on = 1;
 		setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
 		
-		struct rstate *rs = rstate_alloc_init(env, conf_info, 0);
+		struct rstate *rs = rstate_alloc_init(env, conf_info);
 		rs->socket_fd = accepted_fd;
 		
 		pthread_t thread;
@@ -1175,17 +1174,18 @@ int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg
 	return trlmdb_node_time_update(txn, remote_node, time, flag);	
 }
 
-/* returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
+/* write_time_message reads from the database and writes a new message that can be sent on the network
+ * It finds the next time to send to node.
+ * It returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
 int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
 	size_t node_len = strlen(node);
-	
-	uint8_t *node_time = malloc(node_len + 20);
-	if (!node_time) return ENOMEM;
-	memcpy(node_time, node, node_len);
-	memcpy(node_time + node_len, time, 20);
+
+	uint8_t *node_time = encode_node_time(node, node_len, time);
+	if (!node_time)
+		return ENOMEM;
+
 	MDB_val node_time_val = {node_len + 20, node_time};
-	
 	MDB_cursor *cursor;
 	int rc = mdb_cursor_open(txn->mdb_txn, txn->env->dbi_node_time, &cursor);
 	if (rc) {
@@ -1211,7 +1211,8 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 	free(node_time);
 	mdb_cursor_close(cursor);
 	
-	if (node_time_val.mv_size != node_len + 20 || memcmp(node_time_val.mv_data, node, node_len) != 0) return MDB_NOTFOUND;
+	if (node_time_val.mv_size != node_len + 20 || memcmp(node_time_val.mv_data, node, node_len) != 0)
+		return MDB_NOTFOUND;
 
 	memcpy(time, node_time_val.mv_data + node_len, 20);
 
@@ -1227,22 +1228,28 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 	msg_reset(msg);
 
 	rc = msg_append(msg, (uint8_t*) "time", 4);
-	if (rc) return rc;
+	if (rc)
+		return rc;
 
 	rc = msg_append(msg, out_flag, 2);
-	if (rc) return rc;
+	if (rc)
+		return rc;
 
 	rc = msg_append(msg, time, 20);
-	if (rc) return rc;
+	if (rc)
+		return rc;
 
 	if (out_flag[1] == 'f' && key_known) {
 		rc = msg_append(msg, (uint8_t*)key.mv_data, key.mv_size);
-		if (rc) return rc;
+		if (rc)
+			return rc;
 	
 		if (time_is_put(time)) {
 			MDB_val data;
 			rc = mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, &data);
-			if (rc) return rc;
+			if (rc)
+				return rc;
+
 			rc = msg_append(msg, (uint8_t*)data.mv_data, data.mv_size);
 		}
 	}
@@ -1254,7 +1261,10 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 	return 0;
 }
 
-/* The replicator server */
+/* The replicator server 
+ * replicator(struct conf_info*) is called by main to start the replicator
+*/
+
 void *replicator_loop(void *arg);
 
 void replicator(struct conf_info *conf_info)
@@ -1274,6 +1284,14 @@ void replicator(struct conf_info *conf_info)
 		exit(1);
 	}
 
+	for (int i = 0; i < conf_info->naccept; i++) {
+		char *node = conf_info->accept_node[i];
+
+		int rc = trlmdb_node_add(env, node);
+		if (rc)
+			log_mdb_err(rc);
+	}
+	
 	pthread_t *threads;
 	if (conf_info->nconnect > 0) {
 		threads = calloc(conf_info->nconnect, sizeof threads);
@@ -1286,10 +1304,11 @@ void replicator(struct conf_info *conf_info)
 		if (rc)
 			log_mdb_err(rc);
 		
-		struct rstate *rs = rstate_alloc_init(env, conf_info, 1);
+		struct rstate *rs = rstate_alloc_init(env, conf_info);
 		if (!rs)
 			log_enomem();
 
+		rs->connect_now = 1;
 		rs->connect_node = node;
 		char *address = conf_info->connect_address[i];
 		char *colon = strchr(address, ':');
@@ -1313,14 +1332,6 @@ void replicator(struct conf_info *conf_info)
 		}
 
 		threads[i] = thread;
-	}
-
-	for (int i = 0; i < conf_info->naccept; i++) {
-		char *node = conf_info->accept_node[i];
-
-		int rc = trlmdb_node_add(env, node);
-		if (rc)
-			log_mdb_err(rc);
 	}
 	
 	if (conf_info->port) {
@@ -1554,9 +1565,12 @@ void replicator_iteration(struct rstate *rs)
 	printf("\n\n\nIteration\n");
 	print_rstate(rs);
 
-	if (rs->socket_fd == -1 && rs->connector) {
+	if (rs->socket_fd == -1 && rs->connect_node && rs->connect_now) {
 		printf("connect to remote\n");
 		connect_to_remote(rs);
+	} else if (rs->socket_fd == -1 && rs->connect_node) {
+		printf("sleeping before connecting again\n");
+		sleep(10);
 	} else if (rs->socket_fd == -1) {
 		printf("acceptor exits\n");
 		rstate_free(rs);
