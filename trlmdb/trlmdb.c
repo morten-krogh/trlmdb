@@ -1020,10 +1020,10 @@ int trlmdb_node_add(struct trlmdb_env *env, char *node)
 	MDB_val node_val = {strlen(node), node};
 	MDB_val data = {0, ""};
 	rc = mdb_put(txn, env->dbi_nodes, &node_val, &data, MDB_NOOVERWRITE);
-	if (rc == MDB_KEYEXIST)
-		return 0;
-	if (rc)
-		return rc;
+	if (rc) {
+		mdb_txn_commit(txn);
+		return rc == MDB_KEYEXIST ? 0 : rc;
+	}
 
 	rc = trlmdb_node_put_all_times(env, txn, node);
 	if (rc) {
@@ -1176,13 +1176,22 @@ int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg
 /* write_time_message reads from the database and writes a new message that can be sent on the network
  * It finds the next time to send to node.
  * It returns MDB_NOTFOUND if time is the last entry in node_time for that node */ 
-int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
+int write_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
+	printf("write_time_message\n");
+	
 	size_t node_len = strlen(node);
 
+	printf("hi2\n");
+	
+
+	
 	uint8_t *node_time = encode_node_time(node, node_len, time);
 	if (!node_time)
 		return ENOMEM;
+
+		printf("hi2\n");
+	
 
 	MDB_val node_time_val = {node_len + 20, node_time};
 	MDB_cursor *cursor;
@@ -1191,6 +1200,8 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 		free(node_time);
 		return rc;
 	}
+	printf("hi2\n");
+	
 	
 	MDB_val flag_val;
 	rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_SET_RANGE);
@@ -1198,6 +1209,8 @@ int write_time_message(struct trlmdb_txn *txn, uint8_t *time, char *node, struct
 		free(node_time);
 		return rc;
 	}
+	printf("hi2\n");
+	
 
 	if (node_time_val.mv_size == node_len + 20 && memcmp(node_time_val.mv_data, node_time, node_len + 20) == 0) {
 		rc = mdb_cursor_get(cursor, &node_time_val, &flag_val, MDB_NEXT);
@@ -1276,7 +1289,7 @@ void replicator(struct conf_info *conf_info)
 		log_stderr("The lmdb environment could not be created");
 		exit(1);
 	}
-
+	
 	rc = trlmdb_env_open(env, conf_info->database, 0, 0644);
 	if (rc) {
 		log_stderr("The database could not be opened");
@@ -1290,7 +1303,7 @@ void replicator(struct conf_info *conf_info)
 		if (rc)
 			log_mdb_err(rc);
 	}
-	
+
 	pthread_t *threads;
 	if (conf_info->nconnect > 0) {
 		threads = calloc(conf_info->nconnect, sizeof threads);
@@ -1332,10 +1345,12 @@ void replicator(struct conf_info *conf_info)
 
 		threads[i] = thread;
 	}
-	
+
 	if (conf_info->port) {
 		int listen_fd = create_listener("localhost", conf_info->port);
-		if (listen_fd != -1) accept_loop(listen_fd, env, conf_info, replicator_loop);
+		printf("listen_fd = %d\n", listen_fd);
+		if (listen_fd != -1)
+			accept_loop(listen_fd, env, conf_info, replicator_loop);
 	}
 
 	for (int i = 0; i < conf_info->nconnect; i++) {
@@ -1355,10 +1370,6 @@ void connect_to_remote(struct rstate *rs)
 	rs->read_buf_loaded = 0;
 	
 	rs->socket_fd = create_connection(rs->connect_hostname, rs->connect_servname);
-	printf("socket_fd = %d\n", rs->socket_fd); 
-	
-	if (rs->socket_fd == -1)
-		printf("Connection could not be created\n");
 }
 
 void load_node_msg(struct rstate *rs)
@@ -1461,7 +1472,8 @@ void load_write_msg(struct rstate *rs)
 	if (rc)
 		log_mdb_err(rc);
 
-	rc = write_time_message(txn, rs->write_time, rs->remote_node, rs->write_msg);
+	rc = write_time_msg(txn, rs->write_time, rs->remote_node, rs->write_msg);
+	printf("hi3\n");
 	if (rc)
 		log_mdb_err(rc);
 	
@@ -1472,6 +1484,8 @@ void load_write_msg(struct rstate *rs)
 		rs->end_of_write_loop = 1;
 		memset(rs->write_time, 0, 20);
 	}
+
+	printf("hi4\n");
 
 	rc = trlmdb_txn_commit(txn);
 	if (rc)
@@ -1536,11 +1550,14 @@ void replicator_iteration(struct rstate *rs)
 	printf("\n\n\nIteration\n");
 	print_rstate(rs);
 
+	printf("\n\n\n\n");
+	
 	if (rs->socket_fd == -1 && rs->connect_node && rs->connect_now) {
 		printf("connect to remote\n");
 		connect_to_remote(rs);
 	} else if (rs->socket_fd == -1 && rs->connect_node) {
 		printf("sleeping before connecting again\n");
+		rs->connect_now = 1;
 		sleep(10);
 	} else if (rs->socket_fd == -1) {
 		printf("acceptor exits\n");
@@ -1558,7 +1575,7 @@ void replicator_iteration(struct rstate *rs)
 	} else if (rs->socket_readable) {
 		printf("Read from socket\n");
 		read_from_socket(rs);
-	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop) {
+	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop && rs->remote_node) {
 		printf("Load write msg\n");
 		load_write_msg(rs);
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
@@ -1569,7 +1586,8 @@ void replicator_iteration(struct rstate *rs)
 		poll_socket(rs);
 	}
 
-	sleep(5);
+	print_rstate(rs);
+	sleep(15);
 }
 
 /* The replicator thread start routine */
