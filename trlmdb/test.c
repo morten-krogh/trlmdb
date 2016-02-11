@@ -45,7 +45,30 @@ void print_table(trlmdb_txn *txn, char *table)
 		print_mdb_val(&val);
 	} while (!trlmdb_cursor_next(cursor));
 }
+
+void print_table_backwards(trlmdb_txn *txn, char *table)
+{
+	printf("\n%s backwards:\n", table);
 	
+	trlmdb_cursor *cursor;
+	int rc = trlmdb_cursor_open(txn, table, &cursor);
+	if (rc)
+		return;
+		
+	rc = trlmdb_cursor_last(cursor);
+	if (rc)
+		return;
+
+	MDB_val key, val;
+	do {
+		trlmdb_cursor_get(cursor, &key, &val);
+		printf("key: ");
+		print_mdb_val(&key);
+		printf("val: ");
+		print_mdb_val(&val);
+	} while (!trlmdb_cursor_prev(cursor));
+}
+
 void print_error(int rc)
 {
 	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
@@ -88,6 +111,13 @@ void test(void)
 	assert(!rc);
 
 	MDB_val val_2;
+	rc = trlmdb_get(txn, table_1, &key_1, &val_2);
+	assert(!rc);
+	assert(!cmp_mdb_val(&val_1, &val_2));
+
+	rc = trlmdb_put(txn, table_1, &key_1, &val_1);
+	assert(!rc);
+
 	rc = trlmdb_get(txn, table_1, &key_1, &val_2);
 	assert(!rc);
 	assert(!cmp_mdb_val(&val_1, &val_2));
@@ -214,8 +244,8 @@ void test(void)
 
 	trlmdb_cursor_close(cursor);
 
-	MDB_val key_5 = {5, "key-5"};
-	MDB_val val_5 = {5, "val-5"};
+	MDB_val key_5 = {5, "key_5"};
+	MDB_val val_5 = {5, "val_5"};
 
 	rc = trlmdb_put(txn, table_1, &key_5, &val_5);
 	assert(!rc);
@@ -232,15 +262,15 @@ void test(void)
 
 	print_table(txn, table_1);
 	
-	MDB_val key_6 = {5, "key-6"};
-	MDB_val val_6 = {5, "val-6"};
+	MDB_val key_6 = {5, "key_6"};
+	MDB_val val_6 = {5, "val_6"};
 
 	rc = trlmdb_put(txn, table_1, &key_6, &val_6);
 	assert(!rc);
 
 	trlmdb_txn_abort(txn);
 	
-	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	rc = trlmdb_txn_begin(env_1, MDB_RDONLY, &txn);
 	assert(!rc);
 
 	print_table(txn, table_1);
@@ -251,5 +281,41 @@ void test(void)
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);
 
+	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	assert(!rc);
+
+	MDB_val key_11 = {5, "key_1"};
+	MDB_val val_11 = {5, "val_1"};
+
+	rc = trlmdb_put(txn, table_1, &key_11, &val_11);
+	assert(!rc);
+
+	rc = trlmdb_get(txn, table_1, &key_11, &val_2);
+	assert(!rc);
+	assert(!cmp_mdb_val(&val_11, &val_2));
+
+	MDB_val key_111 = {5, "key_1"};
+	MDB_val val_111 = {5, "val_1"};
+
+	rc = trlmdb_put(txn, table_1, &key_111, &val_111);
+	assert(!rc);
+
+	rc = trlmdb_get(txn, table_1, &key_111, &val_2);
+	assert(!rc);
+	assert(!cmp_mdb_val(&val_111, &val_2));
+
+	print_table(txn, table_1);
+	print_table_backwards(txn, table_1);
+
+	print_table(txn, table_2);
+	print_table_backwards(txn, table_2);
+	
+	char *table_3 = "table-3";
+	print_table(txn, table_3);
+	print_table_backwards(txn, table_3);
+	
+	rc = trlmdb_txn_commit(txn);
+	assert(!rc);
+	
 	trlmdb_env_close(env_1);
 }
