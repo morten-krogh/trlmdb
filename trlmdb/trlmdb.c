@@ -909,7 +909,7 @@ out:
 	return rc;
 }	
 
-int trlmdb_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
+int trlmdb_single_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -921,7 +921,7 @@ int trlmdb_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_data, &time_val, data);
 }
 
-static int trlmdb_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
+static int trlmdb_single_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	int is_put = data != NULL;
 	uint8_t *time = encode_time(txn->time, is_put);
@@ -933,12 +933,12 @@ static int trlmdb_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 	return trlmdb_insert_time_key_data(txn->env, txn->mdb_txn, time, key, data);
 }
 
-int trlmdb_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
+int trlmdb_single_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
-	return trlmdb_put_del(txn, key, data);
+	return trlmdb_single_put_del(txn, key, data);
 }
 
-int trlmdb_del(struct trlmdb_txn *txn, MDB_val *key)
+int trlmdb_single_del(struct trlmdb_txn *txn, MDB_val *key)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -947,7 +947,7 @@ int trlmdb_del(struct trlmdb_txn *txn, MDB_val *key)
 
 	if (!time_is_put(time_val.mv_data)) return MDB_NOTFOUND;
 
-	return trlmdb_put_del(txn, key, NULL);
+	return trlmdb_single_put_del(txn, key, NULL);
 }
 
 int trlmdb_cursor_open(struct trlmdb_txn *txn, struct trlmdb_cursor **cursor)
@@ -1126,6 +1126,91 @@ int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 {
 	MDB_val time_val = {20, time};
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
+}
+
+/* table_key encoding */
+
+MDB_val *encode_table_key(char *table, MDB_val *key)
+{
+	uint8_t table_len = strlen(table);
+
+	MDB_val *table_key = malloc(sizeof *table_key);
+	if (!table_key)
+		return NULL;
+
+	table_key->mv_size = 1 + table_len + key->mv_size;
+	table_key->mv_data = malloc(1 + table_len + key->mv_size);
+	if (!table_key->mv_data) {
+		free(table_key);
+		return NULL;
+	}
+
+	memcpy(table_key->mv_data, &table_len, 1);
+	memcpy(table_key->mv_data + 1, table, table_len);
+	memcpy(table_key->mv_data + 1 + table_len, key->mv_data, key->mv_size);
+
+	return table_key;
+}
+
+void free_table_key(MDB_val *table_key)
+{
+	free(table_key->mv_data);
+	free(table_key);
+}
+
+/* public functions for accessing the database */
+
+/* trlmdb_get looks up the key in the table.
+ * The table name must be at most 255 characters long.
+ * The return value is
+ * 0 at success and value will contain the result.
+ * MDB_NOTFOUND if the key was absent.
+ * ENOMEM if the operation failed due to memory allocation failure.
+ */
+
+int trlmdb_get(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value)
+{
+	if (strlen(table) > 255)
+		return EINVAL;
+	
+	MDB_val *table_key = encode_table_key(table, key);
+	if (!table_key)
+		return ENOMEM;
+
+        int rc = trlmdb_single_get(txn, table_key, value);
+	free_table_key(table_key);
+
+	return rc;
+}
+
+int trlmdb_put(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value)
+{
+	if (strlen(table) > 255)
+		return EINVAL;
+
+	MDB_val *table_key = encode_table_key(table, key);
+	if (!table_key)
+		return ENOMEM;
+
+        int rc = trlmdb_single_put(txn, table_key, value);
+	free_table_key(table_key);
+
+	return rc;
+}
+
+int trlmdb_del(struct trlmdb_txn *txn, char *table, MDB_val *key)
+{
+	if (strlen(table) > 255)
+		return EINVAL;
+
+	MDB_val *table_key = encode_table_key(table, key);
+	if (!table_key)
+		return ENOMEM;
+
+        int rc = trlmdb_single_del(txn, table_key);
+	free_table_key(table_key);
+
+	return rc;
 }
 
 /* time message */

@@ -17,8 +17,8 @@ replicator: replicator.c trlmdb.c midl.o mdb.o
 test_db: test_db.c trlmdb.o
 	cc -O0 midl.o mdb.o trlmdb.o test_db.c -o test_db
 
-test: test.c trlmdb.c mdb.o midl.o
-	cc -O0 midl.o mdb.o test.c -o test
+test: test.c trlmdb.o mdb.o midl.o
+	cc -O0 midl.o mdb.o trlmdb.o test.c -o test
 
 .PHONY: clean
 
