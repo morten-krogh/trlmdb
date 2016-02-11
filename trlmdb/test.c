@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 #include "trlmdb.h"
@@ -11,6 +12,33 @@ int main (void)
 	test();
 	printf("All tests passed\n");
 	return 0;
+}
+
+void print_mdb_val(MDB_val *val)
+{
+	printf("size = %zu, data = ", val->mv_size);
+	for (size_t i = 0; i < val->mv_size; i++) {
+		printf("%02x", *(uint8_t *)(val->mv_data + i));
+	}
+	printf("\n");
+}
+
+void print_error(int rc)
+{
+	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
+}
+
+int cmp_mdb_val(MDB_val *val_1, MDB_val *val_2)
+{
+	size_t min_size = val_1->mv_size < val_2->mv_size ? val_1->mv_size : val_2->mv_size;
+	int res = memcmp(val_1->mv_data, val_2->mv_data, min_size);
+	if (res)
+		return res;
+
+	if (val_1->mv_size == val_2->mv_size)
+		return 0;
+	
+	return val_1->mv_size > val_2->mv_size ? 1 : -1;
 }
 
 void test(void)
@@ -28,13 +56,58 @@ void test(void)
 	rc = trlmdb_txn_begin(env_1, 0, &txn);
 	assert(!rc);
 
-	char *table = "table-1";
+	char *table_1 = "table-1";
 	
-	MDB_val key_1 = {1, "key_1"};
-	MDB_val val_1 = {2, "val_1"};
+	MDB_val key_1 = {5, "key_1"};
+	MDB_val val_1 = {5, "val_1"};
 	
-	rc = trlmdb_put(txn, table, &key_1, &val_1);
+	rc = trlmdb_put(txn, table_1, &key_1, &val_1);
 	assert(!rc);
+
+	MDB_val val_2;
+	rc = trlmdb_get(txn, table_1, &key_1, &val_2);
+	assert(!rc);
+	assert(!cmp_mdb_val(&val_1, &val_2));
+	
+	rc = trlmdb_txn_commit(txn);
+	assert(!rc);
+
+	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	assert(!rc);
+
+	rc = trlmdb_del(txn, table_1, &key_1);
+	assert(!rc);
+
+	rc = trlmdb_get(txn, table_1, &key_1, &val_2);
+	assert(rc == MDB_NOTFOUND);
+	print_mdb_val(&val_2);
+
+	char *table_2 = "table-2";
+	MDB_val key_3 = {5, "key_3"};
+	MDB_val val_3 = {5, "val_3"};
+
+	rc = trlmdb_put(txn, table_2, &key_3, &val_3);
+	assert(!rc);
+
+	rc = trlmdb_txn_commit(txn);
+	assert(!rc);
+
+	trlmdb_env_close(env_1);
+
+	rc = trlmdb_env_create(&env_1);
+	assert(!rc);
+	
+	rc = trlmdb_env_open(env_1, "./trlmdb-1", 0, 0644);
+	assert(!rc);
+
+	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	assert(!rc);
+
+	rc = trlmdb_get(txn, table_2, &key_3, &val_2);
+	assert(!rc);
+	assert(!cmp_mdb_val(&val_3, &val_2));
+
+
 
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);

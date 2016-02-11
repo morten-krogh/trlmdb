@@ -158,7 +158,7 @@ void print_struct_time(struct time *time)
 	printf("\n");
 }
 
-void print_mdb_val(MDB_val *val)
+static void print_mdb_val(MDB_val *val)
 {
 	printf("size = %zu, data = ", val->mv_size);
 	for (size_t i = 0; i < val->mv_size; i++) {
