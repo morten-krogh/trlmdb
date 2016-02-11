@@ -107,7 +107,24 @@ void test(void)
 	assert(!rc);
 	assert(!cmp_mdb_val(&val_3, &val_2));
 
+	trlmdb_cursor *cursor;
+	rc = trlmdb_cursor_open(txn, table_2, &cursor);
+	print_error(rc);
+	assert(!rc);
+	
+	rc = trlmdb_cursor_first(cursor);
+	assert(!rc);
 
+	MDB_val key, val;
+	rc = trlmdb_cursor_get(cursor, &key, &val);
+	assert(!rc);
+	assert(!cmp_mdb_val(&key, &key_3));
+	assert(!cmp_mdb_val(&val, &val_3));
+
+	print_mdb_val(&key);
+	print_mdb_val(&val);
+	
+	trlmdb_cursor_close(cursor);
 
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);

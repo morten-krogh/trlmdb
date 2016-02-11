@@ -15,14 +15,14 @@ int trlmdb_txn_begin(trlmdb_env *env, unsigned int flags, trlmdb_txn **txn);
 int  trlmdb_txn_commit(trlmdb_txn *txn);
 void trlmdb_txn_abort(trlmdb_txn *txn);
 
-int trlmdb_get(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *data);
-int trlmdb_put(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *data);
+int trlmdb_get(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
+int trlmdb_put(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
 int trlmdb_del(trlmdb_txn *txn, char *table, MDB_val *key);
 
-int trlmdb_cursor_open(trlmdb_txn *txn, trlmdb_cursor **cursor);
+int trlmdb_cursor_open(trlmdb_txn *txn, char *table, trlmdb_cursor **cursor);
 void trlmdb_cursor_close(trlmdb_cursor *cursor);
-int trlmdb_cursor_get_first(trlmdb_cursor *cursor, MDB_val *key, MDB_val *data);
-int trlmdb_cursor_get_next(trlmdb_cursor *cursor, MDB_val *key, MDB_val *data);	
+int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
+int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *value);
 
 
 #endif

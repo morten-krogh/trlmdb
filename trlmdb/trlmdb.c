@@ -66,6 +66,7 @@ struct trlmdb_txn {
 struct trlmdb_cursor {
 	struct trlmdb_txn *txn;
 	MDB_cursor *mdb_cursor;
+	char *table;
 };
 
 /* Replicator state */
@@ -950,50 +951,6 @@ int trlmdb_single_del(struct trlmdb_txn *txn, MDB_val *key)
 	return trlmdb_single_put_del(txn, key, NULL);
 }
 
-int trlmdb_cursor_open(struct trlmdb_txn *txn, struct trlmdb_cursor **cursor)
-{
-	*cursor = malloc(sizeof **cursor);
-	if (*cursor) return ENOMEM; 
-
-	(*cursor)->txn = txn;
-	return mdb_cursor_open(txn->mdb_txn, txn->env->dbi_key_to_time, &((*cursor)->mdb_cursor));
-}
-
-void trlmdb_cursor_close(struct trlmdb_cursor *cursor){
-	mdb_cursor_close(cursor->mdb_cursor);
-	free(cursor);
-}
-
-int trlmdb_cursor_get_next(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *data)
-{
-	MDB_val time_val;
-
-	for (;;) {
-		int rc = mdb_cursor_get(cursor->mdb_cursor, key, &time_val, MDB_NEXT);
-		if (rc)
-			return rc;
-
-		if (!time_is_put(time_val.mv_data))
-			continue;
-
-		return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, data);
-	}
-}
-
-int trlmdb_cursor_get_first(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *data)
-{
-	MDB_val time_val;
-
-	int rc = mdb_cursor_get(cursor->mdb_cursor, key, &time_val, MDB_SET_RANGE);
-	if (rc)
-		return rc;
-
-	if (!time_is_put(time_val.mv_data))
-		return trlmdb_cursor_get_next(cursor, key, data);
-
-	return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, data);
-}
-
 static int trlmdb_node_put_all_times(struct trlmdb_env *env, MDB_txn *txn, char *node)
 {
 	size_t node_len = strlen(node);
@@ -1132,21 +1089,21 @@ int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 
 MDB_val *encode_table_key(char *table, MDB_val *key)
 {
-	uint8_t table_len = strlen(table);
+	size_t table_len = strlen(table);
 
 	MDB_val *table_key = malloc(sizeof *table_key);
 	if (!table_key)
 		return NULL;
 
-	table_key->mv_size = 1 + table_len + key->mv_size;
-	table_key->mv_data = malloc(1 + table_len + key->mv_size);
+	table_key->mv_size = table_len + 1 + key->mv_size;
+	table_key->mv_data = malloc(table_key->mv_size);
 	if (!table_key->mv_data) {
 		free(table_key);
 		return NULL;
 	}
 
-	memcpy(table_key->mv_data, &table_len, 1);
-	memcpy(table_key->mv_data + 1, table, table_len);
+	memcpy(table_key->mv_data, table, table_len);
+	memset(table_key->mv_data + table_len, 0, 1);
 	memcpy(table_key->mv_data + 1 + table_len, key->mv_data, key->mv_size);
 
 	return table_key;
@@ -1158,10 +1115,22 @@ void free_table_key(MDB_val *table_key)
 	free(table_key);
 }
 
+int remove_table_prefix(MDB_val *table_key, MDB_val *key)
+{
+	size_t table_len = strnlen(table_key->mv_data, table_key->mv_size);
+	if (table_len == table_key->mv_size)
+		return EINVAL;
+	
+	key->mv_size = table_key->mv_size - table_len - 1;
+	key->mv_data = table_key->mv_data + table_len + 1;
+
+	return 0;
+}
+
 /* public functions for accessing the database */
 
 /* trlmdb_get looks up the key in the table.
- * The table name must be at most 255 characters long.
+ * The table name must be null terminated.
  * The return value is
  * 0 at success and value will contain the result.
  * MDB_NOTFOUND if the key was absent.
@@ -1170,9 +1139,6 @@ void free_table_key(MDB_val *table_key)
 
 int trlmdb_get(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value)
 {
-	if (strlen(table) > 255)
-		return EINVAL;
-	
 	MDB_val *table_key = encode_table_key(table, key);
 	if (!table_key)
 		return ENOMEM;
@@ -1185,9 +1151,6 @@ int trlmdb_get(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value
 
 int trlmdb_put(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value)
 {
-	if (strlen(table) > 255)
-		return EINVAL;
-
 	MDB_val *table_key = encode_table_key(table, key);
 	if (!table_key)
 		return ENOMEM;
@@ -1200,9 +1163,6 @@ int trlmdb_put(struct trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value
 
 int trlmdb_del(struct trlmdb_txn *txn, char *table, MDB_val *key)
 {
-	if (strlen(table) > 255)
-		return EINVAL;
-
 	MDB_val *table_key = encode_table_key(table, key);
 	if (!table_key)
 		return ENOMEM;
@@ -1212,6 +1172,83 @@ int trlmdb_del(struct trlmdb_txn *txn, char *table, MDB_val *key)
 
 	return rc;
 }
+
+int trlmdb_cursor_open(struct trlmdb_txn *txn, char *table, struct trlmdb_cursor **cursor)
+{
+	*cursor = malloc(sizeof **cursor);
+	if (!*cursor) return ENOMEM; 
+
+	(*cursor)->txn = txn;
+	(*cursor)->table = strdup(table);
+	return mdb_cursor_open(txn->mdb_txn, txn->env->dbi_key_to_time, &((*cursor)->mdb_cursor));
+}
+
+void trlmdb_cursor_close(struct trlmdb_cursor *cursor){
+	mdb_cursor_close(cursor->mdb_cursor);
+	free(cursor->table);
+	free(cursor);
+}
+
+int trlmdb_cursor_first(struct trlmdb_cursor *cursor)
+{
+	size_t table_len = strlen(cursor->table);
+	MDB_val key = {table_len, cursor->table};
+	MDB_val time_val;
+	
+	int rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_SET_RANGE);
+	while (!rc && !time_is_put(time_val.mv_data)) {
+		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_NEXT);
+	}
+		
+	if (rc)
+		return rc;
+
+	if (table_len + 1 > key.mv_size || memcmp(cursor->table, key.mv_data, table_len + 1))
+		return MDB_NOTFOUND;
+
+	return 0;
+}
+
+int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val)
+{
+	MDB_val table_key, time_val;
+	int rc = mdb_cursor_get(cursor->mdb_cursor, &table_key, &time_val, MDB_GET_CURRENT);
+	if (rc || !time_is_put(time_val.mv_data))
+		return MDB_NOTFOUND;
+
+	rc = remove_table_prefix(&table_key, key);
+	if (rc)
+		return rc;
+	
+	return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, val);
+}
+
+
+
+
+/* int trlmdb_cursor_get_next(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *data) */
+/* { */
+/* 	MDB_val time_val; */
+
+/* 	for (;;) { */
+/* 		int rc = mdb_cursor_get(cursor->mdb_cursor, key, &time_val, MDB_NEXT); */
+/* 		if (rc) */
+/* 			return rc; */
+
+/* 		if (!time_is_put(time_val.mv_data)) */
+/* 			continue; */
+
+/* 		return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, data); */
+/* 	} */
+/* } */
+
+
+
+
+
+
+
+
 
 /* time message */
 
