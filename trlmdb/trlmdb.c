@@ -98,7 +98,7 @@ struct rstate {
 
 /* Logging and printing */
 
-int log_stdout(const char * restrict format, ...)
+static int log_stdout(const char * restrict format, ...)
 {
 	va_list ap;
 
@@ -108,7 +108,7 @@ int log_stdout(const char * restrict format, ...)
 	return rc;
 }
 
-int log_stderr(const char * restrict format, ...)
+static int log_stderr(const char * restrict format, ...)
 {
 	va_list ap;
 
@@ -118,7 +118,7 @@ int log_stderr(const char * restrict format, ...)
 	return rc;
 }
 
-void log_fatal_err(const char * restrict format, ...)
+static void log_fatal_err(const char * restrict format, ...)
 {
  	va_list ap;
 
@@ -129,17 +129,17 @@ void log_fatal_err(const char * restrict format, ...)
 	exit(1);
 }
 
-void log_mdb_err(int rc)
+static void log_mdb_err(int rc)
 {
 	log_fatal_err("lmdb error: %d, %s\n", rc, mdb_strerror(rc));
 }
 
-void log_enomem()
+static void log_enomem()
 {
 	log_fatal_err("malloc failed\n");
 }
 
-void print_buf(uint8_t *buf, uint64_t size)
+static void print_buf(uint8_t *buf, uint64_t size)
 {
 	printf("size = %llu\n", size);
 	for (uint64_t i = 0; i < size; i++) {
@@ -148,8 +148,8 @@ void print_buf(uint8_t *buf, uint64_t size)
 	printf("\n");
 }
 
-uint8_t *encode_time(struct time *time, int is_put);
-void print_struct_time(struct time *time)
+static uint8_t *encode_time(struct time *time, int is_put);
+static void print_struct_time(struct time *time)
 {
 	uint8_t *encoded_time = encode_time(time, 0);
 	printf("encoded time = ");
@@ -168,9 +168,9 @@ static void print_mdb_val(MDB_val *val)
 	printf("\n");
 }
 
-uint64_t msg_get_count(struct message *msg);
-int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size);
-void print_message(struct message *msg)
+static uint64_t msg_get_count(struct message *msg);
+static int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size);
+static void print_message(struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
 	printf("count = %llu\n", count);
@@ -183,7 +183,7 @@ void print_message(struct message *msg)
 	}
 }
 
-void print_rstate(struct rstate *rs)
+static void print_rstate(struct rstate *rs)
 {
 	printf("node = %s\n", rs->node);
 	printf("socket_fd = %d\n", rs->socket_fd);
@@ -216,7 +216,7 @@ void print_rstate(struct rstate *rs)
 /* malloc */
 
 /* tr_malloc logs and exits if malloc fails */
-void *tr_malloc(size_t size)
+static void *tr_malloc(size_t size)
 {
 	void *mem = malloc(size);
 	if (!mem)
@@ -225,7 +225,7 @@ void *tr_malloc(size_t size)
 	return mem;
 }
 
-void *tr_realloc(void *ptr, size_t size)
+static void *tr_realloc(void *ptr, size_t size)
 {
 	void *mem = realloc(ptr, size);
 	if (!mem)
@@ -364,7 +364,7 @@ struct conf_info *parse_conf_file(const char *conf_file)
 
 /* Messages */
 
-struct message *msg_alloc_init(uint64_t cap)
+static struct message *msg_alloc_init(uint64_t cap)
 {
 	cap = cap < 8 ? 8 : cap;
 	struct message *msg = tr_malloc(sizeof *msg);
@@ -376,13 +376,13 @@ struct message *msg_alloc_init(uint64_t cap)
 	return msg;
 }
 
-void msg_free(struct message *msg)
+static void msg_free(struct message *msg)
 {
 	free(msg->buf);
 	free(msg);
 }
 
-void msg_reset(struct message *msg)
+static void msg_reset(struct message *msg)
 {
 	encode_uint64(msg->buf, 8);
 	msg->size = 8;
@@ -401,7 +401,7 @@ struct message *msg_from_buf(uint8_t *buf, uint64_t buf_size)
 	return msg;
 }
 
-int msg_append(struct message *msg, uint8_t *data, uint64_t size)
+static int msg_append(struct message *msg, uint8_t *data, uint64_t size)
 {
 	uint64_t new_cap = msg->size + 8 + size;
 	if (new_cap > msg->cap) {
@@ -422,7 +422,7 @@ int msg_append(struct message *msg, uint8_t *data, uint64_t size)
 	return 0;
 }
 
-uint64_t msg_get_count(struct message *msg)
+static uint64_t msg_get_count(struct message *msg)
 {
 	uint8_t *buf = msg->buf + 8;
 	uint64_t remaining = msg->size - 8;
@@ -437,7 +437,7 @@ uint64_t msg_get_count(struct message *msg)
 	return count;
 }
 
-int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
+static int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *size)
 {
 	uint8_t *buf = msg->buf + 8;
 	uint64_t remaining = msg->size - 8;
@@ -459,7 +459,7 @@ int msg_get_elem(struct message *msg, uint64_t index, uint8_t **data, uint64_t *
 
 /* replicator state */
 
-struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_info)
+static struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_info)
 {
 	struct rstate *rs = tr_malloc(sizeof *rs);
 	*rs = (struct rstate) {0};
@@ -476,7 +476,7 @@ struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info *conf_
 	return rs;
 }
 
-void rstate_free(struct rstate *rs)
+static void rstate_free(struct rstate *rs)
 {
 	free(rs->connect_node);
 	free(rs->connect_hostname);
@@ -503,7 +503,7 @@ void rstate_free(struct rstate *rs)
  * Node-time is the concatenation of a node name and time.
  */
 
-struct time *time_gettimeofday(struct time *time)
+static struct time *time_gettimeofday(struct time *time)
 {
 	struct timeval tv;
 	int rc = gettimeofday(&tv, NULL);
@@ -518,20 +518,20 @@ struct time *time_gettimeofday(struct time *time)
 	return time;
 }
 
-struct time *time_inc(struct time *time)
+static struct time *time_inc(struct time *time)
 {
 	time->counter += 2;
 	return time;
 }
 
-struct time *time_prepare(struct time *time)
+static struct time *time_prepare(struct time *time)
 {
 	time_gettimeofday(time);
 	time->counter = 0;
 	return time;
 }
 
-uint8_t *encode_time(struct time *time, int is_put)
+static uint8_t *encode_time(struct time *time, int is_put)
 {
 	uint8_t *encoded = malloc(20);
 	if (!encoded)
@@ -547,7 +547,7 @@ uint8_t *encode_time(struct time *time, int is_put)
 	return encoded;
 }
 
-int time_is_put(uint8_t *time)
+static int time_is_put(uint8_t *time)
 {
 	return *(time + 19) & 1;
 }
@@ -557,7 +557,7 @@ static int time_cmp(uint8_t *time1, uint8_t *time2)
 	return memcmp(time1, time2, 20);
 }
 
-uint8_t *encode_node_time(char *node, size_t node_size, uint8_t *time)
+static uint8_t *encode_node_time(char *node, size_t node_size, uint8_t *time)
 {
 	uint8_t *node_time = malloc(node_size + 20);
 	if (!node_time)
@@ -571,7 +571,7 @@ uint8_t *encode_node_time(char *node, size_t node_size, uint8_t *time)
 /* Network code */
 
 /* create_listener returns a valid fd. It exists if there are errors. */
-int create_listener(const char *hostname, const char *servname)
+static int create_listener(const char *hostname, const char *servname)
 {
 	struct addrinfo hints = {0};
 
@@ -614,7 +614,7 @@ int create_listener(const char *hostname, const char *servname)
 	return listen_fd;
 }
 
-void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info *conf_info, void *(*handler)(void*))
+static void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info *conf_info, void *(*handler)(void*))
 {
         pthread_attr_t attr;
         pthread_attr_init(&attr);
@@ -641,7 +641,7 @@ void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info *conf_i
 	}
 }
 
-int create_connection(const char *hostname, const char *servname)
+static int create_connection(const char *hostname, const char *servname)
 {
 	struct addrinfo hints = {0};
 
@@ -683,7 +683,7 @@ int create_connection(const char *hostname, const char *servname)
 }
 
 /* node message */
-char *read_node(struct message *msg)
+static char *read_node(struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
 	if (count != 2)
@@ -706,7 +706,7 @@ char *read_node(struct message *msg)
 	return node;
 }
 
-void write_node(struct message *msg, const char *node)
+static void write_node(struct message *msg, const char *node)
 {
 	msg_reset(msg);
 	msg_append(msg, (uint8_t*) "node", 4); 
@@ -865,7 +865,7 @@ static int trlmdb_node_put_time_all_nodes(struct trlmdb_env *env, MDB_txn *txn, 
 	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-int trlmdb_insert_time_key_data(struct trlmdb_env *env, MDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *data)
+static int trlmdb_insert_time_key_data(struct trlmdb_env *env, MDB_txn *txn, uint8_t *time, MDB_val *key, MDB_val *data)
 {
 	MDB_txn *child_txn;
 	int rc = mdb_txn_begin(env->mdb_env, txn, 0, &child_txn);
@@ -910,7 +910,7 @@ out:
 	return rc;
 }	
 
-int trlmdb_single_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
+static int trlmdb_single_get(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -934,12 +934,12 @@ static int trlmdb_single_put_del(struct trlmdb_txn *txn, MDB_val *key, MDB_val *
 	return trlmdb_insert_time_key_data(txn->env, txn->mdb_txn, time, key, data);
 }
 
-int trlmdb_single_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
+static int trlmdb_single_put(struct trlmdb_txn *txn, MDB_val *key, MDB_val *data)
 {
 	return trlmdb_single_put_del(txn, key, data);
 }
 
-int trlmdb_single_del(struct trlmdb_txn *txn, MDB_val *key)
+static int trlmdb_single_del(struct trlmdb_txn *txn, MDB_val *key)
 {
 	MDB_val time_val;
 	int rc = mdb_get(txn->mdb_txn, txn->env->dbi_key_to_time, key, &time_val);
@@ -978,7 +978,7 @@ static int trlmdb_node_put_all_times(struct trlmdb_env *env, MDB_txn *txn, char 
 	return rc == MDB_NOTFOUND ? 0 : rc;
 }
 
-int trlmdb_node_add(struct trlmdb_env *env, char *node)
+static int trlmdb_node_add(struct trlmdb_env *env, char *node)
 {
 	MDB_txn *txn;
 	int rc = mdb_txn_begin(env->mdb_env, NULL, 0, &txn);
@@ -1003,7 +1003,7 @@ int trlmdb_node_add(struct trlmdb_env *env, char *node)
 	return rc;	
 }
 
-int trlmdb_node_del(struct trlmdb_env *env, char *node)
+static int trlmdb_node_del(struct trlmdb_env *env, char *node)
 {
 	MDB_txn *txn;
 	int rc = mdb_txn_begin(env->mdb_env, NULL, 0, &txn);
@@ -1041,7 +1041,7 @@ int trlmdb_node_del(struct trlmdb_env *env, char *node)
 	return mdb_txn_commit(txn);
 }
 
-int trlmdb_node_time_update(struct trlmdb_txn *txn, char *node, uint8_t *time, uint8_t* flag)
+static int trlmdb_node_time_update(struct trlmdb_txn *txn, char *node, uint8_t *time, uint8_t* flag)
 {
 	size_t node_len = strlen(node);
 	uint8_t *node_time = encode_node_time(node, node_len, time);
@@ -1062,7 +1062,7 @@ int trlmdb_node_time_update(struct trlmdb_txn *txn, char *node, uint8_t *time, u
 }
 
 /* returns 1 if node exists, 0 if the node does not exist, and -1 for an error */
-int trlmdb_node_exists(struct trlmdb_env *env, char *node)
+static int trlmdb_node_exists(struct trlmdb_env *env, char *node)
 {
 	MDB_val key = {strlen(node), node};
 	MDB_val data = {0, ""};
@@ -1079,7 +1079,7 @@ int trlmdb_node_exists(struct trlmdb_env *env, char *node)
 	return rc == MDB_NOTFOUND ? 0 : 1;
 }
 
-int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
+static int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 {
 	MDB_val time_val = {20, time};
 	return mdb_get(txn->mdb_txn, txn->env->dbi_time_to_key, &time_val, key);
@@ -1087,7 +1087,7 @@ int trlmdb_get_key_for_time(struct trlmdb_txn *txn, uint8_t *time, MDB_val *key)
 
 /* table_key encoding */
 
-MDB_val *encode_table_key(char *table, MDB_val *key)
+static MDB_val *encode_table_key(char *table, MDB_val *key)
 {
 	size_t table_len = strlen(table);
 
@@ -1109,13 +1109,13 @@ MDB_val *encode_table_key(char *table, MDB_val *key)
 	return table_key;
 }
 
-void free_table_key(MDB_val *table_key)
+static void free_table_key(MDB_val *table_key)
 {
 	free(table_key->mv_data);
 	free(table_key);
 }
 
-int remove_table_prefix(MDB_val *table_key, MDB_val *key)
+static int remove_table_prefix(MDB_val *table_key, MDB_val *key)
 {
 	size_t table_len = strnlen(table_key->mv_data, table_key->mv_size);
 	if (table_len == table_key->mv_size)
@@ -1303,7 +1303,7 @@ int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val)
 /* time message */
 
 /* read_time_msg reads the msg, verifies that it is a time msg, and inserts the information in the database */
-int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg)
+static int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg)
 {
 	uint64_t count = msg_get_count(msg);
 	if (count < 3 || count > 5)
@@ -1361,7 +1361,7 @@ int read_time_msg(struct trlmdb_txn *txn, char *remote_node, struct message *msg
  * It returns 0 if a msg is loaded, MDB_NOTFOUND if time is the last entry in node_time for that node 
  * and ENOMEM if there was a memory problem.
  */ 
-int load_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
+static int load_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct message *msg)
 {
 	size_t node_len = strlen(node);
 
@@ -1447,7 +1447,7 @@ int load_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, struct mess
  * replicator(struct conf_info*) is called by main to start the replicator
 */
 
-void *replicator_loop(void *arg);
+static void *replicator_loop(void *arg);
 
 void replicator(struct conf_info *conf_info)
 {
@@ -1530,7 +1530,7 @@ void replicator(struct conf_info *conf_info)
 
 /* event handlers in the replicator loop */
 
-void connect_to_remote(struct rstate *rs)
+static void connect_to_remote(struct rstate *rs)
 {
 	rs->node_msg_sent = 0;
 	rs->node_msg_received = 0;
@@ -1542,7 +1542,7 @@ void connect_to_remote(struct rstate *rs)
 	rs->socket_fd = create_connection(rs->connect_hostname, rs->connect_servname);
 }
 
-void send_node_msg(struct rstate *rs)
+static void send_node_msg(struct rstate *rs)
 {
 	struct message *msg = rs->write_msg;
 	
@@ -1552,7 +1552,7 @@ void send_node_msg(struct rstate *rs)
 	rs->write_msg_loaded = 1;
 }
 
-void read_node_msg_from_buf(struct rstate *rs)
+static void read_node_msg_from_buf(struct rstate *rs)
 {
 	struct message *msg = msg_from_buf(rs->read_buf, rs->read_buf_size);
 	if (!msg) {
@@ -1588,7 +1588,7 @@ void read_node_msg_from_buf(struct rstate *rs)
 	}
 }
 
-void read_time_msg_from_buf(struct rstate *rs)
+static void read_time_msg_from_buf(struct rstate *rs)
 {
 	struct message *msg;
 	uint64_t msg_index = 0;
@@ -1611,7 +1611,7 @@ void read_time_msg_from_buf(struct rstate *rs)
 	rs->read_buf_loaded = 0;
 }
 
-void read_from_socket(struct rstate *rs)
+static void read_from_socket(struct rstate *rs)
 {
 	if (rs->read_buf_size == rs->read_buf_cap) {
 		uint8_t *realloced = (uint8_t*) realloc(rs->read_buf, 2 * rs->read_buf_cap);
@@ -1635,7 +1635,7 @@ void read_from_socket(struct rstate *rs)
 	printf("nread = %zu\n", nread);
 }
 
-void load_write_msg(struct rstate *rs)
+static void load_write_msg(struct rstate *rs)
 {
 	struct trlmdb_txn *txn;
 	int rc = trlmdb_txn_begin(rs->env, 0, &txn);
@@ -1660,7 +1660,7 @@ void load_write_msg(struct rstate *rs)
 		log_mdb_err(rc);
 }
 
-void write_to_socket(struct rstate *rs)
+static void write_to_socket(struct rstate *rs)
 {
 	ssize_t nwritten = write(rs->socket_fd, rs->write_msg->buf, rs->write_msg->size - rs->write_msg_nwritten);
 	if (nwritten < 1) {
@@ -1679,9 +1679,9 @@ void write_to_socket(struct rstate *rs)
 	rs->socket_writable = 0;
 }
 
-void poll_socket(struct rstate *rs)
+static void poll_socket(struct rstate *rs)
 {
-	int timeout = 10000; /* milliseconds */
+	int timeout = 1000; /* milliseconds */
 	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
@@ -1713,7 +1713,7 @@ void poll_socket(struct rstate *rs)
 	}
 }
 
-void replicator_iteration(struct rstate *rs)
+static void replicator_iteration(struct rstate *rs)
 {
 	printf("\n\n\nIteration\n");
 	
@@ -1752,11 +1752,11 @@ void replicator_iteration(struct rstate *rs)
 	}
 
 	print_rstate(rs);
-	sleep(15);
+	/* sleep(1); */
 }
 
 /* The replicator thread start routine */
-void *replicator_loop(void *arg)
+static void *replicator_loop(void *arg)
 {
 	struct rstate *rs = (struct rstate*) arg;
 

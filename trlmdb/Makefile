@@ -1,6 +1,6 @@
 
 
-all: test
+all: test replicator
 
 mdb.o: mdb.c lmdb.h midl.h
 	cc -O0 -c mdb.c
