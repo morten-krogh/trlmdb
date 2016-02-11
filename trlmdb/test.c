@@ -23,6 +23,27 @@ void print_mdb_val(MDB_val *val)
 	printf("\n");
 }
 
+void print_table(trlmdb_txn *txn, char *table)
+{
+	trlmdb_cursor *cursor;
+	int rc = trlmdb_cursor_open(txn, table, &cursor);
+	if (rc)
+		return;
+		
+	rc = trlmdb_cursor_first(cursor);
+	if (rc)
+		return;
+
+	MDB_val key, val;
+	do {
+		trlmdb_cursor_get(cursor, &key, &val);
+		printf("key: ");
+		print_mdb_val(&key);
+		printf("val: ");
+		print_mdb_val(&val);
+	} while (!trlmdb_cursor_next(cursor));
+}
+	
 void print_error(int rc)
 {
 	fprintf(stderr, "%d, %s\n", rc, mdb_strerror(rc));
@@ -89,6 +110,12 @@ void test(void)
 	rc = trlmdb_put(txn, table_2, &key_3, &val_3);
 	assert(!rc);
 
+	MDB_val key_4 = {5, "key_4"};
+	MDB_val val_4 = {5, "val_4"};
+
+	rc = trlmdb_put(txn, table_2, &key_4, &val_4);
+	assert(!rc);
+	
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);
 
@@ -111,21 +138,45 @@ void test(void)
 	rc = trlmdb_cursor_open(txn, table_2, &cursor);
 	print_error(rc);
 	assert(!rc);
+
+	MDB_val key, val;
 	
 	rc = trlmdb_cursor_first(cursor);
 	assert(!rc);
 
-	MDB_val key, val;
 	rc = trlmdb_cursor_get(cursor, &key, &val);
 	assert(!rc);
 	assert(!cmp_mdb_val(&key, &key_3));
 	assert(!cmp_mdb_val(&val, &val_3));
 
-	print_mdb_val(&key);
-	print_mdb_val(&val);
+	rc = trlmdb_cursor_next(cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_get(cursor, &key, &val);
+	assert(!rc);
+	assert(!cmp_mdb_val(&key, &key_4));
+	assert(!cmp_mdb_val(&val, &val_4));
+
+	rc = trlmdb_cursor_next(cursor);
+	assert(rc == MDB_NOTFOUND);
 	
 	trlmdb_cursor_close(cursor);
 
+	MDB_val key_0 = {5, "key_0"};
+	MDB_val val_0 = {5, "val_0"};
+
+	rc = trlmdb_put(txn, table_2, &key_0, &val_0);
+	assert(!rc);
+
+	rc = trlmdb_del(txn, table_2, &key_3);
+	assert(!rc);
+
+	MDB_val key_no = {6, "key_no"};
+	rc = trlmdb_del(txn, table_2, &key_no);
+	assert(rc == MDB_NOTFOUND);
+
+	print_table(txn, table_2);
+	
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);
 
