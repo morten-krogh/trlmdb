@@ -1209,6 +1209,43 @@ int trlmdb_cursor_first(struct trlmdb_cursor *cursor)
 	return 0;
 }
 
+int trlmdb_cursor_last(struct trlmdb_cursor *cursor)
+{
+	size_t table_len = strlen(cursor->table);
+	uint8_t *table_successor = malloc(table_len + 1);
+	if (!table_successor)
+		return ENOMEM;
+
+	memcpy(table_successor, cursor->table, table_len);
+	table_successor[table_len] = 1;
+
+	MDB_val key = {table_len + 1, table_successor};
+	MDB_val time_val;
+	
+	int rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_SET_RANGE);
+	if (rc) {
+		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_LAST);
+		if (rc)
+			return rc;
+	} else {
+		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_PREV);
+		if (rc)
+			return rc;
+	}
+		
+	while (!rc && !time_is_put(time_val.mv_data)) {
+		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_PREV);
+	}
+		
+	if (rc)
+		return rc;
+
+	if (table_len + 1 > key.mv_size || memcmp(cursor->table, key.mv_data, table_len + 1))
+		return MDB_NOTFOUND;
+
+	return 0;
+}
+
 int trlmdb_cursor_next(struct trlmdb_cursor *cursor)
 {
 	size_t table_len = strlen(cursor->table);
@@ -1229,43 +1266,25 @@ int trlmdb_cursor_next(struct trlmdb_cursor *cursor)
 	return 0;
 }
 
+int trlmdb_cursor_prev(struct trlmdb_cursor *cursor)
+{
+	size_t table_len = strlen(cursor->table);
+	MDB_val key;
+	MDB_val time_val;
 
-
-
-/* int trlmdb_cursor_last(struct trlmdb_cursor *cursor) */
-/* { */
-/* 	size_t table_len = strlen(cursor->table); */
-/* 	uint8_t *table_successor = malloc(table_len + 1); */
-/* 	if (!table_successor) */
-/* 		return ENOMEM; */
-
-/* 	memcpy(table_successor, cursor->table, table_len); */
-/* 	table_successor[table_len] = 1; */
-	
-/* 	MDB_val key = {table_len + 1, table_successor}; */
-/* 	MDB_val time_val; */
-	
-/* 	int rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_SET_RANGE); */
-	
-	
-/* 	while (!rc && !time_is_put(time_val.mv_data)) { */
-/* 		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_NEXT); */
-/* 	} */
+	int rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_PREV);
+	while (!rc && !time_is_put(time_val.mv_data)) {
+		rc = mdb_cursor_get(cursor->mdb_cursor, &key, &time_val, MDB_PREV);
+	}
 		
-/* 	if (rc) */
-/* 		return rc; */
+	if (rc)
+		return rc;
 
-/* 	if (table_len + 1 > key.mv_size || memcmp(cursor->table, key.mv_data, table_len + 1)) */
-/* 		return MDB_NOTFOUND; */
+	if (table_len + 1 > key.mv_size || memcmp(cursor->table, key.mv_data, table_len + 1))
+		return MDB_NOTFOUND;
 
-/* 	return 0; */
-/* } */
-
-
-
-
-
-
+	return 0;
+}
 
 int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val)
 {
@@ -1280,38 +1299,6 @@ int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val)
 	
 	return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, val);
 }
-
-
-
-
-
-
-
-
-
-/* int trlmdb_cursor_get_next(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *data) */
-/* { */
-/* 	MDB_val time_val; */
-
-/* 	for (;;) { */
-/* 		int rc = mdb_cursor_get(cursor->mdb_cursor, key, &time_val, MDB_NEXT); */
-/* 		if (rc) */
-/* 			return rc; */
-
-/* 		if (!time_is_put(time_val.mv_data)) */
-/* 			continue; */
-
-/* 		return mdb_get(cursor->txn->mdb_txn, cursor->txn->env->dbi_time_to_data, &time_val, data); */
-/* 	} */
-/* } */
-
-
-
-
-
-
-
-
 
 /* time message */
 

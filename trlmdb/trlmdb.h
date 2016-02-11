@@ -22,7 +22,9 @@ int trlmdb_del(trlmdb_txn *txn, char *table, MDB_val *key);
 int trlmdb_cursor_open(trlmdb_txn *txn, char *table, trlmdb_cursor **cursor);
 void trlmdb_cursor_close(trlmdb_cursor *cursor);
 int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
+int trlmdb_cursor_last(struct trlmdb_cursor *cursor);
 int trlmdb_cursor_next(struct trlmdb_cursor *cursor);
+int trlmdb_cursor_prev(struct trlmdb_cursor *cursor);
 int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *value);
 
 

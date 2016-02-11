@@ -25,6 +25,8 @@ void print_mdb_val(MDB_val *val)
 
 void print_table(trlmdb_txn *txn, char *table)
 {
+	printf("\n%s:\n", table);
+	
 	trlmdb_cursor *cursor;
 	int rc = trlmdb_cursor_open(txn, table, &cursor);
 	if (rc)
@@ -136,7 +138,6 @@ void test(void)
 
 	trlmdb_cursor *cursor;
 	rc = trlmdb_cursor_open(txn, table_2, &cursor);
-	print_error(rc);
 	assert(!rc);
 
 	MDB_val key, val;
@@ -149,6 +150,23 @@ void test(void)
 	assert(!cmp_mdb_val(&key, &key_3));
 	assert(!cmp_mdb_val(&val, &val_3));
 
+	rc = trlmdb_cursor_next(cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_get(cursor, &key, &val);
+	assert(!rc);
+	assert(!cmp_mdb_val(&key, &key_4));
+	assert(!cmp_mdb_val(&val, &val_4));
+
+	rc = trlmdb_cursor_prev(cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_get(cursor, &key, &val);
+	assert(!rc);
+	assert(!cmp_mdb_val(&key, &key_3));
+	assert(!cmp_mdb_val(&val, &val_3));
+
+	
 	rc = trlmdb_cursor_next(cursor);
 	assert(!rc);
 
@@ -175,153 +193,63 @@ void test(void)
 	rc = trlmdb_del(txn, table_2, &key_no);
 	assert(rc == MDB_NOTFOUND);
 
+	rc = trlmdb_cursor_open(txn, table_2, &cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_last(cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_get(cursor, &key, &val);
+	assert(!rc);
+	assert(!cmp_mdb_val(&key, &key_4));
+	assert(!cmp_mdb_val(&val, &val_4));
+
+	trlmdb_cursor_close(cursor);
+
+	rc = trlmdb_cursor_open(txn, table_1, &cursor);
+	assert(!rc);
+
+	rc = trlmdb_cursor_last(cursor);
+	assert(rc = MDB_NOTFOUND);
+
+	trlmdb_cursor_close(cursor);
+
+	MDB_val key_5 = {5, "key-5"};
+	MDB_val val_5 = {5, "val-5"};
+
+	rc = trlmdb_put(txn, table_1, &key_5, &val_5);
+	assert(!rc);
+	
+	print_table(txn, table_1);
 	print_table(txn, table_2);
+	
+	rc = trlmdb_txn_commit(txn);
+	assert(!rc);
+
+	
+	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	assert(!rc);
+
+	print_table(txn, table_1);
+	
+	MDB_val key_6 = {5, "key-6"};
+	MDB_val val_6 = {5, "val-6"};
+
+	rc = trlmdb_put(txn, table_1, &key_6, &val_6);
+	assert(!rc);
+
+	trlmdb_txn_abort(txn);
+	
+	rc = trlmdb_txn_begin(env_1, 0, &txn);
+	assert(!rc);
+
+	print_table(txn, table_1);
+		
+	rc = trlmdb_get(txn, table_1, &key_6, &val);
+	assert(rc == MDB_NOTFOUND);
 	
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);
 
 	trlmdb_env_close(env_1);
 }
-
-/* void trlmdb_test (void) */
-/* { */
-/* 	int rc = 0; */
-/* 	TRLMDB_env *env; */
-
-/* 	rc = trlmdb_env_create(&env); */
-/* 	if (rc) print_error(rc);  */
-	
-/* 	rc = trlmdb_env_open(env, "./testdb", 0, 0644); */
-/* 	if (rc) print_error(rc); */
-
-/* 	TRLMDB_txn *txn; */
-	
-/* 	/\* add nodes *\/ */
-/* 	rc = trlmdb_txn_begin(env, NULL, 0, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_node_add(txn, "node-1"); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_node_add(txn, "mm"); */
-/* 	if (rc) print_error(rc); */
-	
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-	
-/* 	/\* add keys/values *\/ */
-	
-/* 	rc = trlmdb_txn_begin(env, NULL, 0, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	MDB_val key_1 = {1, "a"}; */
-/* 	MDB_val val_1 = {2, "aa"}; */
-	
-/* 	rc = trlmdb_put(txn, &key_1, &val_1); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	MDB_val key_2 = {1, "a"}; */
-/* 	MDB_val val_2; */
-/* 	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn); */
-/* 	rc = trlmdb_get(txn, &key_2, &val_2); */
-/* 	if (rc) print_error(rc); */
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-/* 	print_mdb_val(&val_2); */
-	
-/* 	rc = trlmdb_txn_begin(env, NULL, 0, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	MDB_val key_3 = {1, "c"}; */
-/* 	rc = trlmdb_del(txn, &key_3); */
-/* 	if (rc && rc != MDB_NOTFOUND) print_error(rc); */
-
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn); */
-/* 	rc = trlmdb_get(txn, &key_2, &val_2); */
-/* 	if (rc) print_error(rc); */
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-/* 	print_mdb_val(&val_2); */
-	
-/* 	trlmdb_env_close(env); */
-
-/* 	/\* nested transaction *\/ */
-
-/* 	rc = trlmdb_env_create(&env); */
-/* 	if (rc) print_error(rc); */
-	
-/* 	rc = trlmdb_env_open(env, "./testdb", 0, 0644); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_txn_begin(env, NULL, 0, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	key_1.mv_data = "e"; */
-/* 	val_1.mv_data = "ee"; */
-/* 	rc = trlmdb_put(txn, &key_1, &val_1); */
-/* 	if (rc) print_error(rc); */
-
-/* 	TRLMDB_txn *txn_2; */
-/* 	rc = trlmdb_txn_begin(env, txn, 0, &txn_2); */
-
-/* 	key_1.mv_data = "f"; */
-/* 	val_1.mv_data = "ff"; */
-/* 	rc = trlmdb_put(txn_2, &key_1, &val_1); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_txn_commit(txn_2); */
-/* 	if (rc) print_error(rc); */
-
-/* 	key_1.mv_data = "g"; */
-/* 	val_1.mv_data = "gg"; */
-/* 	rc = trlmdb_put(txn, &key_1, &val_1); */
-/* 	if (rc) print_error(rc); */
-
-/* 	key_1.mv_data = "e"; */
-/* 	val_1.mv_data = "ee"; */
-/* 	rc = trlmdb_del(txn, &key_1); */
-/* 	if (rc) print_error(rc); */
-	
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-	
-/* 	/\* cursor *\/ */
-/* 	rc = trlmdb_txn_begin(env, NULL, MDB_RDONLY, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	TRLMDB_cursor *cursor; */
-/* 	rc = trlmdb_cursor_open(txn, &cursor); */
-/* 	if (rc) print_error(rc); */
-
-/* 	MDB_val key, val; */
-	
-/* 	int is_deleted = 0; */
-/* 	while ((rc = trlmdb_cursor_get(cursor, &key, &val, &is_deleted, MDB_NEXT)) == 0) { */
-/* 		printf("key = %.*s, is_deleted = %d, data = %.*s\n", (int) key.mv_size,  (char *) key.mv_data, is_deleted, (int) val.mv_size, (char *) val.mv_data); */
-/* 	} */
-
-/* 	trlmdb_cursor_close(cursor); */
-
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	/\* delete node *\/ */
-/* 	rc = trlmdb_txn_begin(env, NULL, 0, &txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	rc = trlmdb_node_del(txn, "mm"); */
-/* 	if (rc) print_error(rc); */
-
-/* 	if (rc) print_error(rc); */
-	
-/* 	rc = trlmdb_txn_commit(txn); */
-/* 	if (rc) print_error(rc); */
-
-/* 	trlmdb_env_close(env); */
-/* } */
