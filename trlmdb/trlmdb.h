@@ -91,17 +91,91 @@ int  trlmdb_txn_commit(trlmdb_txn *txn);
 void trlmdb_txn_abort(trlmdb_txn *txn);
 
 
+/* trlmdb_get gets a the value for a key in a table. 
+ * @param[in] txn, an open transaction.
+ * @param[in] table, a null-terminated string
+ * @param[in] key, a byte buffer and a length in an MDB_val struct.
+ *   typedef struct MDB_val {
+ *           size_t mv_size;
+ *           void *mv_data;
+ *   } MDB_val;
+ * @param[out] value, the result will be available in value. Copy the buffer before the transaction
+ * is done if the result is needed.
+ * @return, 0 on success, MDB_NOTFOUND if the key is absent, ENOMEM if memory allocation fails. 
+ */
 int trlmdb_get(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
+
+
+/* trlmdb_put puts the value for a key in a table. 
+ * @param[in] txn, an open transaction.
+ * @param[in] table, a null-terminated string
+ * @param[in] key, a byte buffer and a length in an MDB_val struct.
+ * @param[in] value, the value to store in trlmdb.
+ * @return, 0 on success, ENOMEM if memory allocation fails, LMDB error codes for mdb_put. 
+ */
 int trlmdb_put(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
+
+
+/* trlmdb_del deletes the key and associated value in a table. 
+ * @param[in] txn, an open transaction.
+ * @param[in] table, a null-terminated string
+ * @param[in] key, a byte buffer and a length in an MDB_val struct.
+ * @return, 0 on success, ENOMEM if memory allocation fails, LMDB error codes for mdb_del. 
+ */
 int trlmdb_del(trlmdb_txn *txn, char *table, MDB_val *key);
 
-int trlmdb_cursor_open(trlmdb_txn *txn, char *table, trlmdb_cursor **cursor);
-void trlmdb_cursor_close(trlmdb_cursor *cursor);
-int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
-int trlmdb_cursor_last(struct trlmdb_cursor *cursor);
-int trlmdb_cursor_next(struct trlmdb_cursor *cursor);
-int trlmdb_cursor_prev(struct trlmdb_cursor *cursor);
-int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *value);
 
+/* trlmdb_cursor_open opens a cursor that can be used to traverse a table.
+ * @param[in] txn, an open transaction
+ * @param[in] table, the table to traverse.
+ * @param[out] cursor, a pointer to the cursor to create
+ * @return 0 on success, ENOMEM if memory allocation failed.
+ */
+int trlmdb_cursor_open(trlmdb_txn *txn, char *table, trlmdb_cursor **cursor);
+
+
+/* trlmdb_cursor_close closes the cursor
+ * @param[in] cursor
+ */
+void trlmdb_cursor_close(trlmdb_cursor *cursor);
+
+
+/* trlmdb_cursor_first positions the cursor at the first key in the table used to open the cursor.
+ * @param[in] cursor.
+ * @return 0 on success, MDB_NOTFOUND if the table is empty.
+ */
+int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
+
+
+/* trlmdb_cursor_last positions the cursor at the last key in the table.
+ * @param[in] cursor.
+ * @return 0 on success, MDB_NOTFOUND if the table is empty.
+ */
+int trlmdb_cursor_last(struct trlmdb_cursor *cursor);
+
+
+/* trlmdb_cursor_next positions the cursor at the next key in the table.
+ * @param[in] cursor.
+ * @return 0 on success, MDB_NOTFOUND if the end of the table has been reached.
+ */
+int trlmdb_cursor_next(struct trlmdb_cursor *cursor);
+
+
+/* trlmdb_cursor_prev positions the cursor at the previous key in the table.
+ * @param[in] cursor.
+ * @return 0 on success, MDB_NOTFOUND if the end of the table has been reached.
+ */
+int trlmdb_cursor_prev(struct trlmdb_cursor *cursor);
+
+
+/* trlmdb_cursor_get gets the key and value for current cursor.
+ * @param[in] cursor.
+ * @param[out] key, the current key is placed in the MDB_val key.
+ * @param[out] val, the current value is placed in the MDB_val val.
+ * @return 0 on success, MDB_NOTFOUND if the key, value is absent.
+ *   MDB_NOTFOUND will only be returned if one of the four functions above 
+ *   returned MDB_NOTFOUND. 
+*/
+int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val);
 
 #endif
