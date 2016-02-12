@@ -737,6 +737,11 @@ int trlmdb_env_create(struct trlmdb_env **env)
 	return rc;
 }
 
+int trlmdb_env_set_mapsize(struct trlmdb_env *env, uint64_t size)
+{
+	return mdb_env_set_mapsize(env->mdb_env, size);	
+}
+
 int trlmdb_env_open(struct trlmdb_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
 {
 	int rc = 0;
