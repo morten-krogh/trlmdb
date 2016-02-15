@@ -139,7 +139,7 @@ void test(void)
 
 	char *table = "table";
 
-	int N = 1000;
+	int N = 1005;
 
 	rc = trlmdb_txn_begin(env_1, 0, &txn);
 	assert(!rc);

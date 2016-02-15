@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <sys/uio.h>
 #include <pthread.h>
 #include <poll.h>
 
@@ -19,6 +20,8 @@
 #define DB_KEY_TO_TIME "db_key_to_time"
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
+
+#define N_WRITE_MSG 50
 
 /* Structs */
 
@@ -89,7 +92,7 @@ struct rstate {
 	uint64_t read_buf_cap;
 	uint64_t read_buf_size;
 	int read_buf_loaded;
-	struct message *write_msg;
+	struct message *write_msg[N_WRITE_MSG];
 	uint64_t write_msg_nwritten;
 	int write_msg_loaded;
 	uint8_t write_time[20];
@@ -208,7 +211,7 @@ static void print_rstate(struct rstate *rs)
 	printf("write_msg_nwritten = %llu\n", rs->write_msg_nwritten);
 	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
 	printf("write_msg\n");
-	print_message(rs->write_msg);
+	print_message(rs->write_msg[rs->write_msg_loaded]);
 	printf("write_time\n");
 	print_buf(rs->write_time, 20);
 	printf("end_of_write_loop = %d\n", rs->end_of_write_loop);
@@ -482,7 +485,9 @@ static struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info
 	rs->accept_node = conf_info->accept_node;
 	rs->read_buf_cap = 10000; 
 	rs->read_buf = tr_malloc(rs->read_buf_cap);
-	rs->write_msg = msg_alloc_init(256);
+	for (int i = 0; i < N_WRITE_MSG; i++) {
+		rs->write_msg[i] = msg_alloc_init(256);
+	}
 	
 	return rs;
 }
@@ -492,7 +497,9 @@ static void rstate_free(struct rstate *rs)
 	free(rs->connect_node);
 	free(rs->connect_hostname);
 	free(rs->connect_servname);
-	msg_free(rs->write_msg);
+	for (int i = 0; i < N_WRITE_MSG; i++) {
+		msg_free(rs->write_msg[i]);
+	}
 	free(rs->read_buf);
 	free(rs);
 }
@@ -744,7 +751,7 @@ int trlmdb_env_create(struct trlmdb_env **env)
 	}
 
 	mdb_env_set_maxdbs((*env)->mdb_env, 5);
-	uint64_t map_size = (uint64_t)4096 * 4096 * 10;
+	uint64_t map_size = (uint64_t)4096 * 4096 * 300;
 	mdb_env_set_mapsize((*env)->mdb_env, map_size);
 	
 	return rc;
@@ -1562,10 +1569,7 @@ static void connect_to_remote(struct rstate *rs)
 
 static void send_node_msg(struct rstate *rs)
 {
-	struct message *msg = rs->write_msg;
-	
-	write_node(rs->write_msg, rs->node);
-
+	write_node(rs->write_msg[0], rs->node);
 	rs->node_msg_sent = 1;
 	rs->write_msg_loaded = 1;
 }
@@ -1660,17 +1664,19 @@ static void load_write_msg(struct rstate *rs)
 	if (rc)
 		log_mdb_err(rc);
 
-	rc = load_time_msg(txn, rs->write_time, rs->remote_node, rs->write_msg);
-	if (rc == ENOMEM)
-		log_mdb_err(rc);
+	for (int i = rs->write_msg_loaded; i < N_WRITE_MSG; i++) {
+		rc = load_time_msg(txn, rs->write_time, rs->remote_node, rs->write_msg[i]);
+		if (rc == ENOMEM)
+			log_mdb_err(rc);
 	
-	if (rc == 0)
-		rs->write_msg_loaded = 1;
+		if (rc == 0)
+			rs->write_msg_loaded++;
 
-	if (rc == MDB_NOTFOUND) {
-		rs->write_msg_loaded = 0;
-		rs->end_of_write_loop = 1;
-		memset(rs->write_time, 0, 20);
+		if (rc == MDB_NOTFOUND) {
+			rs->end_of_write_loop = 1;
+			memset(rs->write_time, 0, 20);
+			break;
+		}
 	}
 
 	rc = trlmdb_txn_commit(txn);
@@ -1680,18 +1686,32 @@ static void load_write_msg(struct rstate *rs)
 
 static void write_to_socket(struct rstate *rs)
 {
-	ssize_t nwritten = write(rs->socket_fd, rs->write_msg->buf, rs->write_msg->size - rs->write_msg_nwritten);
+	struct iovec iov[N_WRITE_MSG];
+	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
+	for (int i = rs->write_msg_loaded - 1; i >=0; i--) {
+		struct iovec *iovec = iov + (rs->write_msg_loaded - 1 - i);
+		uint64_t offset = i == (rs->write_msg_loaded - 1) ? rs->write_msg_nwritten : 0;
+		iovec->iov_base = rs->write_msg[i]->buf + offset;
+		iovec->iov_len = rs->write_msg[i]->size - offset;
+	}
+	int iovcnt = rs->write_msg_loaded;
+
+	ssize_t nwritten = writev(rs->socket_fd, iov, iovcnt);
 	if (nwritten < 1) {
 		rs->socket_fd = -1;
 		return;
 	}
 
-	rs->write_msg_nwritten += nwritten;
-
-	if (rs->write_msg->size == rs->write_msg_nwritten) {
+	for (int i = rs->write_msg_loaded - 1; i >=0; i--) {
+		uint64_t len = rs->write_msg[i]->size - rs->write_msg_nwritten;
+		if (nwritten < len) {
+			rs->write_msg_nwritten += nwritten;
+			break;
+		}
+		nwritten -= len;
+		msg_reset(rs->write_msg[i]);
+		rs->write_msg_loaded--;
 		rs->write_msg_nwritten = 0;
-		msg_reset(rs->write_msg);
-		rs->write_msg_loaded = 0;
 	}
 
 	rs->socket_writable = 0;
