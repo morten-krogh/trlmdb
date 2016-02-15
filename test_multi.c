@@ -10,6 +10,8 @@
 #define DB_2 "./databases/trlmdb-2"
 #define DB_3 "./databases/trlmdb-3"
 
+#define N 200000
+
 void test(void);
 
 int main (void)
@@ -138,8 +140,6 @@ void test(void)
 	trlmdb_txn *txn;
 
 	char *table = "table";
-
-	int N = 1005;
 
 	rc = trlmdb_txn_begin(env_1, 0, &txn);
 	assert(!rc);

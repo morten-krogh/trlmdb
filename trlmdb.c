@@ -12,6 +12,7 @@
 #include <sys/uio.h>
 #include <pthread.h>
 #include <poll.h>
+#include <fcntl.h>
 
 #include "lmdb.h"
 
@@ -21,7 +22,7 @@
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
 
-#define N_WRITE_MSG 50
+#define N_WRITE_MSG 5000
 
 /* Structs */
 
@@ -645,10 +646,17 @@ static void accept_loop(int listen_fd, struct trlmdb_env *env, struct conf_info 
 		printf("ready to accept\n");
 		int accepted_fd = accept(listen_fd, (struct sockaddr *) &remote_addr, &remote_addr_len);
 		printf("accepted = %d\n", accepted_fd);
-		if (accepted_fd == -1) continue;
+		if (accepted_fd == -1)
+			continue;
 
 		int on = 1;
 		setsockopt(accepted_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+
+		/* int rc = fcntl(accepted_fd, F_SETFL, fcntl(accepted_fd, F_GETFL, 0) | O_NONBLOCK); */
+		/* if (rc == -1) { */
+			/* perror("accept"); */
+			/* continue; */
+		/* } */
 		
 		struct rstate *rs = rstate_alloc_init(env, conf_info);
 		rs->socket_fd = accepted_fd;
@@ -685,14 +693,22 @@ static int create_connection(const char *hostname, const char *servname)
 
 	int on = 1;
 	setsockopt(socket_fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
-	
+
 	rc = connect(socket_fd, res->ai_addr, res->ai_addrlen);
 	if (rc == -1) {
 		freeaddrinfo(res);
 		log_stderr("connect error to %s:%s. Trying again later\n", hostname, servname);
+		perror("connect:");
 		return -1;
 	}
 
+	rc = fcntl(socket_fd, F_SETFL, fcntl(socket_fd, F_GETFL, 0) | O_NONBLOCK);
+	if (rc == -1) {
+		perror("fcntl in connect");
+		freeaddrinfo(res);
+		return -1;
+	}		
+	
 	printf("connected to %s:%s\n", hostname, servname);
 
 	freeaddrinfo(res);
@@ -1702,6 +1718,8 @@ static void write_to_socket(struct rstate *rs)
 		return;
 	}
 
+	printf("nwritten = %zd\n", nwritten);
+	
 	for (int i = rs->write_msg_loaded - 1; i >=0; i--) {
 		uint64_t len = rs->write_msg[i]->size - rs->write_msg_nwritten;
 		if (nwritten < len) {
@@ -1774,16 +1792,16 @@ static void replicator_iteration(struct rstate *rs)
 		/* printf("Read time message from buffer\n"); */
 		read_time_msg_from_buf(rs);
 	} else if (rs->socket_readable) {
-		/* printf("Read from socket\n"); */
+		printf("Read from socket\n");
 		read_from_socket(rs);
 	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop && rs->remote_node) {
-		/* printf("Load write msg\n"); */
+		printf("Load write msg\n");
 		load_write_msg(rs);
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
-		/* printf("Write to socket\n"); */
+		printf("Write to socket\n");
 		write_to_socket(rs);
 	} else {
-		/* printf("Poll\n"); */
+		printf("Poll\n");
 		poll_socket(rs);
 	}
 
