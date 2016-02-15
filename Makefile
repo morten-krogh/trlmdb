@@ -1,6 +1,6 @@
 cflags := -std=c99 -Wpedantic -O0
 
-all: replicator test_single test_multi
+all: replicator test_single test_multi perf
 
 mdb.o: mdb.c lmdb.h midl.h
 	cc $(cflags) -c mdb.c
@@ -19,6 +19,9 @@ test_single: test_single.c trlmdb.o mdb.o midl.o
 
 test_multi: test_multi.c trlmdb.o mdb.o midl.o
 	cc $(cflags) midl.o mdb.o trlmdb.o test_multi.c -o test_multi
+
+perf: perf.c trlmdb.o mdb.o midl.o
+	cc $(clfags) midl.o mdb.o trlmdb.o perf.c -o perf
 
 .PHONY: clean
 

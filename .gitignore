@@ -39,3 +39,4 @@ lock.mdb
 test_single
 test_multi
 replicator
+perf
