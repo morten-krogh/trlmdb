@@ -744,7 +744,9 @@ int trlmdb_env_create(struct trlmdb_env **env)
 	}
 
 	mdb_env_set_maxdbs((*env)->mdb_env, 5);
-
+	uint64_t map_size = (uint64_t)4096 * 4096 * 10;
+	mdb_env_set_mapsize((*env)->mdb_env, map_size);
+	
 	return rc;
 }
 
@@ -1648,7 +1650,7 @@ static void read_from_socket(struct rstate *rs)
 	rs->read_buf_size += nread;
 	rs->socket_readable = 0;
 	rs->read_buf_loaded = 1;
-	printf("nread = %zu\n", nread);
+	/* printf("nread = %zu\n", nread); */
 }
 
 static void load_write_msg(struct rstate *rs)
@@ -1706,22 +1708,22 @@ static void poll_socket(struct rstate *rs)
 	}
 	int rc = poll(&pollfd, 1, rs->poll_timeout);
 	if (rc == 0) {
-		printf("POLL timeout\n");
+		/* printf("POLL timeout\n"); */
 		rs->end_of_write_loop = 0;
 	} else if (rc == 1) {
 		if (pollfd.revents & (POLLHUP | POLLNVAL)) {
-			printf("POLLHUP\n");
+			/* printf("POLLHUP\n"); */
 			close(rs->socket_fd);
 			rs->socket_fd = -1;
 			return;
 		}
 		if (pollfd.revents & POLLRDNORM) {
-			printf("POLLRDNORM\n");
+			/* printf("POLLRDNORM\n"); */
 			rs->end_of_write_loop = 0;
 			rs->socket_readable = 1;
 		}
 		if (pollfd.revents & POLLWRNORM) {
-			printf("POLLWRNORM\n");
+			/* printf("POLLWRNORM\n"); */
 			rs->socket_writable = 1;
 		}
 	}
@@ -1729,43 +1731,43 @@ static void poll_socket(struct rstate *rs)
 
 static void replicator_iteration(struct rstate *rs)
 {
-	printf("\n\n\nIteration\n");
+	/* printf("\n\n\nIteration\n"); */
 	
 	if (rs->socket_fd == -1 && rs->connect_node && rs->connect_now) {
-		printf("connect to remote\n");
+		/* printf("connect to remote\n"); */
 		connect_to_remote(rs);
 	} else if (rs->socket_fd == -1 && rs->connect_node) {
-		printf("sleeping before connecting again\n");
+		/* printf("sleeping before connecting again\n"); */
 		rs->connect_now = 1;
 		sleep(10);
 	} else if (rs->socket_fd == -1) {
-		printf("acceptor exits\n");
+		/* printf("acceptor exits\n"); */
 		rstate_free(rs);
 		pthread_exit(NULL);
 	} else if (!rs->node_msg_sent) {
-		printf("send_node_msg\n");
+		/* printf("send_node_msg\n"); */
 		send_node_msg(rs);
 	} else if (rs->read_buf_loaded && !rs->node_msg_received) {
-		printf("Read node message from buffer\n");
+		/* printf("Read node message from buffer\n"); */
 		read_node_msg_from_buf(rs);
 	} else if (rs->read_buf_loaded) {
-		printf("Read time message from buffer\n");
+		/* printf("Read time message from buffer\n"); */
 		read_time_msg_from_buf(rs);
 	} else if (rs->socket_readable) {
-		printf("Read from socket\n");
+		/* printf("Read from socket\n"); */
 		read_from_socket(rs);
 	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop && rs->remote_node) {
-		printf("Load write msg\n");
+		/* printf("Load write msg\n"); */
 		load_write_msg(rs);
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
-		printf("Write to socket\n");
+		/* printf("Write to socket\n"); */
 		write_to_socket(rs);
 	} else {
-		printf("Poll\n");
+		/* printf("Poll\n"); */
 		poll_socket(rs);
 	}
 
-	print_rstate(rs);
+	/* print_rstate(rs); */
 	/* sleep(1); */
 }
 
