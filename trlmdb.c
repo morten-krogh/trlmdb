@@ -22,7 +22,7 @@
 #define DB_NODES "db_nodes"
 #define DB_NODE_TIME "db_node_time"
 
-#define N_WRITE_MSG 5000
+#define N_WRITE_MSG 50
 
 /* Structs */
 
@@ -1703,7 +1703,7 @@ static void load_write_msg(struct rstate *rs)
 static void write_to_socket(struct rstate *rs)
 {
 	struct iovec iov[N_WRITE_MSG];
-	printf("write_msg_loaded = %d\n", rs->write_msg_loaded);
+	/* printf("write_msg_loaded = %d\n", rs->write_msg_loaded); */
 	for (int i = rs->write_msg_loaded - 1; i >=0; i--) {
 		struct iovec *iovec = iov + (rs->write_msg_loaded - 1 - i);
 		uint64_t offset = i == (rs->write_msg_loaded - 1) ? rs->write_msg_nwritten : 0;
@@ -1714,11 +1714,12 @@ static void write_to_socket(struct rstate *rs)
 
 	ssize_t nwritten = writev(rs->socket_fd, iov, iovcnt);
 	if (nwritten < 1) {
+		perror("writev");
 		rs->socket_fd = -1;
 		return;
 	}
 
-	printf("nwritten = %zd\n", nwritten);
+	/* printf("nwritten = %zd\n", nwritten); */
 	
 	for (int i = rs->write_msg_loaded - 1; i >=0; i--) {
 		uint64_t len = rs->write_msg[i]->size - rs->write_msg_nwritten;
@@ -1731,6 +1732,8 @@ static void write_to_socket(struct rstate *rs)
 		rs->write_msg_loaded--;
 		rs->write_msg_nwritten = 0;
 	}
+
+	/* printf("write_msg_loaded = %d\n", rs->write_msg_loaded); */
 
 	rs->socket_writable = 0;
 }
@@ -1792,16 +1795,16 @@ static void replicator_iteration(struct rstate *rs)
 		/* printf("Read time message from buffer\n"); */
 		read_time_msg_from_buf(rs);
 	} else if (rs->socket_readable) {
-		printf("Read from socket\n");
+		/* printf("Read from socket\n"); */
 		read_from_socket(rs);
 	} else if (!rs->write_msg_loaded && !rs->end_of_write_loop && rs->remote_node) {
-		printf("Load write msg\n");
+		/* printf("Load write msg\n"); */
 		load_write_msg(rs);
 	} else if (rs->write_msg_loaded && rs->socket_writable) {
-		printf("Write to socket\n");
+		/* printf("Write to socket\n"); */
 		write_to_socket(rs);
 	} else {
-		printf("Poll\n");
+		/* printf("Poll\n"); */
 		poll_socket(rs);
 	}
 

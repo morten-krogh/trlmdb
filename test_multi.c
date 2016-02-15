@@ -10,7 +10,7 @@
 #define DB_2 "./databases/trlmdb-2"
 #define DB_3 "./databases/trlmdb-3"
 
-#define N 200000
+#define N 100000
 
 void test(void);
 
@@ -141,54 +141,32 @@ void test(void)
 
 	char *table = "table";
 
-	rc = trlmdb_txn_begin(env_1, 0, &txn);
-	assert(!rc);
-	
 	for (int i = 0; i < N; i++) {
 		make_key_val("key", i, key);
 		make_key_val("val", i, val);
 	
 		MDB_val mdb_key = {strlen(key), key};
 		MDB_val mdb_val = {strlen(val), val};
-	
+
+		trlmdb_env *env = i % 3 == 0 ? env_1 : (i % 3 == 1 ? env_2 : env_3);
+		rc = trlmdb_txn_begin(env, 0, &txn);
+		assert(!rc);
+		
 		rc = trlmdb_put(txn, table, &mdb_key, &mdb_val);
-		if (rc) {
-			printf("i = %d\n", i);
+		assert(!rc);
+
+		rc = trlmdb_txn_commit(txn);
+		if (rc)
 			print_error(rc);
-		}
 		assert(!rc);
 	}
 
-	rc = trlmdb_txn_commit(txn);
-	assert(!rc);
-
-	rc = trlmdb_txn_begin(env_2, 0, &txn);
-	assert(!rc);
-	
-	for (int i = N; i < 2 * N; i++) {
-		make_key_val("key", i, key);
-		make_key_val("val", i, val);
-	
-		MDB_val mdb_key = {strlen(key), key};
-		MDB_val mdb_val = {strlen(val), val};
-	
-		rc = trlmdb_put(txn, table, &mdb_key, &mdb_val);
-		if (rc) {
-			printf("i = %d\n", i);
-			print_error(rc);
-		}
-		assert(!rc);
-	}
-
-	rc = trlmdb_txn_commit(txn);
-	assert(!rc);
-
-	sleep(20);
+	sleep(5 + N / 20000);
 
 	trlmdb_txn_begin(env_1, MDB_RDONLY, &txn);
 	assert(!rc);
 	
-	for (int i = 0; i < 2 * N; i++) {
+	for (int i = 0; i < N; i++) {
 		make_key_val("key", i, key);
 		make_key_val("val", i, val);
 	
@@ -208,7 +186,7 @@ void test(void)
 	trlmdb_txn_begin(env_2, MDB_RDONLY, &txn);
 	assert(!rc);
 	
-	for (int i = 0; i < 2 * N; i++) {
+	for (int i = 0; i < N; i++) {
 		make_key_val("key", i, key);
 		make_key_val("val", i, val);
 	
@@ -228,7 +206,7 @@ void test(void)
 	trlmdb_txn_begin(env_3, MDB_RDONLY, &txn);
 	assert(!rc);
 	
-	for (int i = 0; i < 2 * N; i++) {
+	for (int i = 0; i < N; i++) {
 		make_key_val("key", i, key);
 		make_key_val("val", i, val);
 	
@@ -244,216 +222,4 @@ void test(void)
 
 	rc = trlmdb_txn_commit(txn);
 	assert(!rc);
-
-
-
-
-
-
-
-
-
-
-
-	
-	/* rc = trlmdb_put(txn, table_1, &key_1, &val_1); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_get(txn, table_1, &key_1, &val_2); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&val_1, &val_2)); */
-
-	/* rc = trlmdb_txn_begin(env_1, 0, &txn); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_del(txn, table_1, &key_1); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_get(txn, table_1, &key_1, &val_2); */
-	/* assert(rc == MDB_NOTFOUND); */
-	/* print_mdb_val(&val_2); */
-
-	/* char *table_2 = "table-2"; */
-	/* MDB_val key_3 = {5, "key_3"}; */
-	/* MDB_val val_3 = {5, "val_3"}; */
-
-	/* rc = trlmdb_put(txn, table_2, &key_3, &val_3); */
-	/* assert(!rc); */
-
-	/* MDB_val key_4 = {5, "key_4"}; */
-	/* MDB_val val_4 = {5, "val_4"}; */
-
-	/* rc = trlmdb_put(txn, table_2, &key_4, &val_4); */
-	/* assert(!rc); */
-	
-	/* rc = trlmdb_txn_commit(txn); */
-	/* assert(!rc); */
-
-	/* trlmdb_env_close(env_1); */
-
-	/* rc = trlmdb_env_create(&env_1); */
-	/* assert(!rc); */
-	
-	/* rc = trlmdb_env_open(env_1, TRLMDB_DATABASE, 0, 0644); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_txn_begin(env_1, 0, &txn); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_get(txn, table_2, &key_3, &val_2); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&val_3, &val_2)); */
-
-	/* trlmdb_cursor *cursor; */
-	/* rc = trlmdb_cursor_open(txn, table_2, &cursor); */
-	/* assert(!rc); */
-
-	/* MDB_val key, val; */
-	
-	/* rc = trlmdb_cursor_first(cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_get(cursor, &key, &val); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&key, &key_3)); */
-	/* assert(!cmp_mdb_val(&val, &val_3)); */
-
-	/* rc = trlmdb_cursor_next(cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_get(cursor, &key, &val); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&key, &key_4)); */
-	/* assert(!cmp_mdb_val(&val, &val_4)); */
-
-	/* rc = trlmdb_cursor_prev(cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_get(cursor, &key, &val); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&key, &key_3)); */
-	/* assert(!cmp_mdb_val(&val, &val_3)); */
-
-	
-	/* rc = trlmdb_cursor_next(cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_get(cursor, &key, &val); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&key, &key_4)); */
-	/* assert(!cmp_mdb_val(&val, &val_4)); */
-
-	/* rc = trlmdb_cursor_next(cursor); */
-	/* assert(rc == MDB_NOTFOUND); */
-	
-	/* trlmdb_cursor_close(cursor); */
-
-	/* MDB_val key_0 = {5, "key_0"}; */
-	/* MDB_val val_0 = {5, "val_0"}; */
-
-	/* rc = trlmdb_put(txn, table_2, &key_0, &val_0); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_del(txn, table_2, &key_3); */
-	/* assert(!rc); */
-
-	/* MDB_val key_no = {6, "key_no"}; */
-	/* rc = trlmdb_del(txn, table_2, &key_no); */
-	/* assert(rc == MDB_NOTFOUND); */
-
-	/* rc = trlmdb_cursor_open(txn, table_2, &cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_last(cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_get(cursor, &key, &val); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&key, &key_4)); */
-	/* assert(!cmp_mdb_val(&val, &val_4)); */
-
-	/* trlmdb_cursor_close(cursor); */
-
-	/* rc = trlmdb_cursor_open(txn, table_1, &cursor); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_cursor_last(cursor); */
-	/* assert(rc = MDB_NOTFOUND); */
-
-	/* trlmdb_cursor_close(cursor); */
-
-	/* MDB_val key_5 = {5, "key_5"}; */
-	/* MDB_val val_5 = {5, "val_5"}; */
-
-	/* rc = trlmdb_put(txn, table_1, &key_5, &val_5); */
-	/* assert(!rc); */
-	
-	/* print_table(txn, table_1); */
-	/* print_table(txn, table_2); */
-	
-	/* rc = trlmdb_txn_commit(txn); */
-	/* assert(!rc); */
-
-	
-	/* rc = trlmdb_txn_begin(env_1, 0, &txn); */
-	/* assert(!rc); */
-
-	/* print_table(txn, table_1); */
-	
-	/* MDB_val key_6 = {5, "key_6"}; */
-	/* MDB_val val_6 = {5, "val_6"}; */
-
-	/* rc = trlmdb_put(txn, table_1, &key_6, &val_6); */
-	/* assert(!rc); */
-
-	/* trlmdb_txn_abort(txn); */
-	
-	/* rc = trlmdb_txn_begin(env_1, MDB_RDONLY, &txn); */
-	/* assert(!rc); */
-
-	/* print_table(txn, table_1); */
-		
-	/* rc = trlmdb_get(txn, table_1, &key_6, &val); */
-	/* assert(rc == MDB_NOTFOUND); */
-	
-	/* rc = trlmdb_txn_commit(txn); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_txn_begin(env_1, 0, &txn); */
-	/* assert(!rc); */
-
-	/* MDB_val key_11 = {5, "key_1"}; */
-	/* MDB_val val_11 = {5, "val_1"}; */
-
-	/* rc = trlmdb_put(txn, table_1, &key_11, &val_11); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_get(txn, table_1, &key_11, &val_2); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&val_11, &val_2)); */
-
-	/* MDB_val key_111 = {5, "key_1"}; */
-	/* MDB_val val_111 = {5, "val_1"}; */
-
-	/* rc = trlmdb_put(txn, table_1, &key_111, &val_111); */
-	/* assert(!rc); */
-
-	/* rc = trlmdb_get(txn, table_1, &key_111, &val_2); */
-	/* assert(!rc); */
-	/* assert(!cmp_mdb_val(&val_111, &val_2)); */
-
-	/* print_table(txn, table_1); */
-	/* print_table_backwards(txn, table_1); */
-
-	/* print_table(txn, table_2); */
-	/* print_table_backwards(txn, table_2); */
-	
-	/* char *table_3 = "table-3"; */
-	/* print_table(txn, table_3); */
-	/* print_table_backwards(txn, table_3); */
-	
-	/* rc = trlmdb_txn_commit(txn); */
-	/* assert(!rc); */
-	
-	/* trlmdb_env_close(env_1); */
 }
