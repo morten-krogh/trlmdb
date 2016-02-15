@@ -25,6 +25,7 @@
 struct conf_info {
 	char *database;
 	char *node;
+	int timeout;
 	char *port;
 	int naccept;
 	char **accept_node;
@@ -74,6 +75,7 @@ struct rstate {
 	char *node;
 	struct trlmdb_env *env;
 	int socket_fd;
+	int poll_timeout;  /* milliseconds */
 	int connect_now;
 	char *connect_node;
 	char *connect_hostname;
@@ -163,7 +165,7 @@ static void print_mdb_val(MDB_val *val)
 {
 	printf("size = %zu, data = ", val->mv_size);
 	for (size_t i = 0; i < val->mv_size; i++) {
-		printf("%02x", *(uint8_t *)(val->mv_data + i));
+		printf("%02x", *((uint8_t *)val->mv_data + i));
 	}
 	printf("\n");
 }
@@ -187,6 +189,7 @@ static void print_rstate(struct rstate *rs)
 {
 	printf("node = %s\n", rs->node);
 	printf("socket_fd = %d\n", rs->socket_fd);
+	printf("poll_timeout = %d\n", rs->poll_timeout);
 	printf("connect_now = %d\n", rs->connect_now);
 	printf("connect_node = %s\n", rs->connect_node);
 	printf("connect_hostname = %s\n", rs->connect_hostname);
@@ -326,6 +329,8 @@ struct conf_info *parse_conf_file(const char *conf_file)
 			conf_info->node = strdup(right);
 		} else if (strcmp(left, "port") == 0) {
 			conf_info->port = strdup(right);
+		} else if (strcmp(left, "timeout") == 0) {
+			conf_info->timeout = strtol(right, NULL, 10);
 		} else if (strcmp(left, "accept") == 0) {
 			conf_info->naccept++;
 			conf_info->accept_node = tr_realloc(conf_info->accept_node, conf_info->naccept);
@@ -346,6 +351,8 @@ struct conf_info *parse_conf_file(const char *conf_file)
 	if (!feof(file))
 		log_fatal_err("There was a problem reading the conf file");
 
+	fclose(file);
+	
 	if (!conf_info->database)
 		log_fatal_err("There is no database path in the conf file");
 
@@ -358,7 +365,10 @@ struct conf_info *parse_conf_file(const char *conf_file)
 	if (conf_info->naccept == 0 && conf_info->nconnect == 0)
 		log_fatal_err("There is no accept or connect nodes in the conf file");
 
-	fclose(file);
+	if (conf_info->timeout == 0) {
+		conf_info->timeout = 1000;
+	}
+
 	return conf_info;
 }
 
@@ -467,6 +477,7 @@ static struct rstate *rstate_alloc_init(struct trlmdb_env *env, struct conf_info
 	rs->node = conf_info->node;
 	rs->env = env;
 	rs->socket_fd = -1;
+	rs->poll_timeout = conf_info->timeout;
 	rs->naccept = conf_info->naccept;
 	rs->accept_node = conf_info->accept_node;
 	rs->read_buf_cap = 10000; 
@@ -1108,8 +1119,8 @@ static MDB_val *encode_table_key(char *table, MDB_val *key)
 	}
 
 	memcpy(table_key->mv_data, table, table_len);
-	memset(table_key->mv_data + table_len, 0, 1);
-	memcpy(table_key->mv_data + 1 + table_len, key->mv_data, key->mv_size);
+	memset((uint8_t*)table_key->mv_data + table_len, 0, 1);
+	memcpy((uint8_t*)table_key->mv_data + 1 + table_len, key->mv_data, key->mv_size);
 
 	return table_key;
 }
@@ -1127,7 +1138,7 @@ static int remove_table_prefix(MDB_val *table_key, MDB_val *key)
 		return EINVAL;
 	
 	key->mv_size = table_key->mv_size - table_len - 1;
-	key->mv_data = table_key->mv_data + table_len + 1;
+	key->mv_data = (uint8_t*)table_key->mv_data + table_len + 1;
 
 	return 0;
 }
@@ -1399,7 +1410,7 @@ static int load_time_msg(struct trlmdb_txn *txn, uint8_t *time, char *node, stru
 	if (node_time_val.mv_size != node_len + 20 || memcmp(node_time_val.mv_data, node, node_len) != 0)
 		return MDB_NOTFOUND;
 
-	memcpy(time, node_time_val.mv_data + node_len, 20);
+	memcpy(time, (uint8_t*)node_time_val.mv_data + node_len, 20);
 
 	MDB_val time_val = {20, time};
 	
@@ -1686,8 +1697,6 @@ static void write_to_socket(struct rstate *rs)
 
 static void poll_socket(struct rstate *rs)
 {
-	int timeout = 1000; /* milliseconds */
-	
 	struct pollfd pollfd;
 	pollfd.fd = rs->socket_fd;
 	if (rs->write_msg_loaded) {
@@ -1695,7 +1704,7 @@ static void poll_socket(struct rstate *rs)
 	} else {
 		pollfd.events = POLLRDNORM;
 	}
-	int rc = poll(&pollfd, 1, timeout);
+	int rc = poll(&pollfd, 1, rs->poll_timeout);
 	if (rc == 0) {
 		printf("POLL timeout\n");
 		rs->end_of_write_loop = 0;
