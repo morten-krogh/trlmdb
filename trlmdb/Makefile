@@ -1,28 +1,29 @@
-
+cflags := -std=c99 -Wpedantic -O0
 
 all: test replicator
 
 mdb.o: mdb.c lmdb.h midl.h
-	cc -O0 -c mdb.c
+	cc $(cflags) -c mdb.c
 
 midl.o: midl.c midl.h
-	cc -O0 -c midl.c
+	cc $(cflags) -c midl.c
 
 trlmdb.o: trlmdb.h trlmdb.c
-	cc -O0 -c trlmdb.c 
+	cc $(cflags) -c trlmdb.c 
 
 replicator: replicator.c trlmdb.c midl.o mdb.o
-	cc -O0 midl.o mdb.o replicator.c -o replicator
+	cc $(cflags) midl.o mdb.o replicator.c -o replicator
 
-test_db: test_db.c trlmdb.o
-	cc -O0 midl.o mdb.o trlmdb.o test_db.c -o test_db
-
-test: test.c trlmdb.o mdb.o midl.o
-	cc -O0 midl.o mdb.o trlmdb.o test.c -o test
+test_single: test_single.c trlmdb.o mdb.o midl.o
+	cc $(cflags) midl.o mdb.o trlmdb.o test.c -o test
 
 .PHONY: clean
 
 clean:
-	@- rm test
+	@- rm mdb.o
+	@- rm midl.o
+	@- rm trlmdb.o
+	@- rm replicator
+	@- rm test_single
 	@- rm testdb/*.mdb
 	@- rm *.o

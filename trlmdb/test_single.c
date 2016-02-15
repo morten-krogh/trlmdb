@@ -95,7 +95,7 @@ void test(void)
 	rc = trlmdb_env_create(&env_1);
 	assert(!rc);
 
-	rc = trlmdb_env_open(env_1, "./trlmdb-1", 0, 0644);
+	rc = trlmdb_env_open(env_1, "./databases/trlmdb-single", 0, 0644);
 	assert(!rc);
 
 	trlmdb_txn *txn;
