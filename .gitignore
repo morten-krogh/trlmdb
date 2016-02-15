@@ -36,5 +36,6 @@
 *\**\*
 data.mdb
 lock.mdb
-test
+test_single
+test_multi
 replicator
