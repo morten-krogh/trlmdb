@@ -13,10 +13,12 @@
 #define N 1000
 
 void run_trlmdb(void);
+void run_lmdb(void);
 
 int main(void)
 {
 	run_trlmdb();
+	run_lmdb();
 	return 0;
 }
 
@@ -145,27 +147,115 @@ void run_trlmdb(void)
 	assert(!rc);
 	gettimeofday(&end, NULL);
 	printf("trlmdb, %d reads, one transaction in total, duration = %f seconds\n", N, tvtof(calculate_duration(start, end)));
+}
 
 
+void run_lmdb(void)
+{
+	int rc = 0;
 
+	char key[20];
+	char val[20];
+	
+	MDB_env *env;
+	rc = mdb_env_create(&env);
+	assert(!rc);
 
+	rc = mdb_env_open(env, LMDB_DB, 0, 0644);
+	assert(!rc);
 
+	char *table = "table";
 
+	MDB_txn *txn;
 
+	struct timeval start, end;
 
+	gettimeofday(&start, NULL);
+	for (int i = 0; i < N; i++) {
+		make_key_val("key", i, key);
+		make_key_val("val", i, val);
 
+		MDB_val mdb_key = {strlen(key), key};
+		MDB_val mdb_val = {strlen(val), val};
 
+		rc = mdb_txn_begin(env, NULL, 0, &txn);
+		assert(!rc);
 
+		MDB_dbi dbi;
+		rc =  mdb_dbi_open(txn, NULL, 0, &dbi);
+		assert(!rc);
+		
+		rc = mdb_put(txn, dbi, &mdb_key, &mdb_val, 0);
+		assert(!rc);
 
+		rc = mdb_txn_commit(txn);
+		assert(!rc);
+	}
+	gettimeofday(&end, NULL);
+	printf("lmdb, %d insertions, one transaction per insertion, duration = %f seconds\n", N, tvtof(calculate_duration(start, end)));
 
+	gettimeofday(&start, NULL);
+	rc = mdb_txn_begin(env, NULL, 0, &txn);
+	assert(!rc);
 
+	MDB_dbi dbi;
+	rc =  mdb_dbi_open(txn, NULL, 0, &dbi);
+	assert(!rc);
+	
+	for (int i = 0; i < N; i++) {
+		make_key_val("key", i, key);
+		make_key_val("val", i, val);
 
+		MDB_val mdb_key = {strlen(key), key};
+		MDB_val mdb_val = {strlen(val), val};
 
+		rc = mdb_put(txn, dbi, &mdb_key, &mdb_val, 0);
+		assert(!rc);
+	}
+	rc = mdb_txn_commit(txn);
+	assert(!rc);
+	gettimeofday(&end, NULL);
+	printf("lmdb, %d insertions, one transaction in total, duration = %f seconds\n", N, tvtof(calculate_duration(start, end)));
 
+	gettimeofday(&start, NULL);
+	for (int i = 0; i < N; i++) {
+		make_key_val("key", i, key);
 
+		MDB_val mdb_key = {strlen(key), key};
+		MDB_val mdb_val;
 
+		rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+		assert(!rc);
 
+		MDB_dbi dbi;
+		rc =  mdb_dbi_open(txn, NULL, 0, &dbi);
+		assert(!rc);
+		
+		rc = mdb_get(txn, dbi, &mdb_key, &mdb_val);
+		assert(!rc);
 
+		rc = mdb_txn_commit(txn);
+		assert(!rc);
+	}
+	gettimeofday(&end, NULL);
+	printf("lmdb, %d reads, one transaction per read, duration = %f seconds\n", N, tvtof(calculate_duration(start, end)));
 
+	gettimeofday(&start, NULL);
+	rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+	assert(!rc);
+	rc =  mdb_dbi_open(txn, NULL, 0, &dbi);
+	assert(!rc);
+	for (int i = 0; i < N; i++) {
+		make_key_val("key", i, key);
 
+		MDB_val mdb_key = {strlen(key), key};
+		MDB_val mdb_val;
+
+		rc = mdb_get(txn, dbi, &mdb_key, &mdb_val);
+		assert(!rc);
+	}
+	rc = mdb_txn_commit(txn);
+	assert(!rc);
+	gettimeofday(&end, NULL);
+	printf("lmdb, %d reads, one transaction in total, duration = %f seconds\n", N, tvtof(calculate_duration(start, end)));
 }
