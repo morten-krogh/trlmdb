@@ -25,7 +25,7 @@
 
 #include "lmdb.h"
 
-/* The typedefs define opaque types that should be used throught the functions below.  
+/* The typedefs define opaque types that should be used through the functions below.  
  * They are extended wrappers around equivalent data structures in LMDB.
  * A trlmdb_env environemnt is used to access a given database.  
  * A trlmdb_txn transaction is used to access the database in an atomic manner.
@@ -37,7 +37,7 @@ typedef struct trlmdb_cursor trlmdb_cursor;
 
 
 /* trlmdb_env is the first function to call.  It creates an MDB_env, generates a random id
- * associated with each trlmd environmnt, and sets the number of LMDB databases to 5, which the
+ * associated with each trlmd environment, and sets the number of LMDB databases to 5, which is the
  * number of LMDB databases used internally by trlmdb. To close the environment, call
  * trlmdb_env_close(). Before the environment may be used, it must be opened using trlmdb_env_open().
  */
