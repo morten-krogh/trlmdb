@@ -348,10 +348,11 @@ A replicator with both zero `port` and zero `connect` is useless.
 
 #### Time stamps
 
-trlmdb keeps time stamps, just called time in the code. A time is 20 bytes long and consists of four parts
+trlmdb keeps time stamps, just called time in the code. A time is 20 bytes long and consists of four parts 
+of length 4, 4, 4, and 8 bytes
 
 ```
-time(20 bytes) = seconds-since-unix-epoch(4 bytes) fraction-seconds(4 bytes) environment-id(4 bytes) counter(8 bytes)
+time(20) = seconds-since-epoch(4) fraction-seconds(4) environment-id(4) counter(8)
 ```
 The first three are set at the beginning of a transaction. The counter is incremented by two at every operation, and the last bit is 1 for a pit operation and 0 for s delete operation. The last part is long to avoid overflows in very long transactions. 
 
