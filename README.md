@@ -1,4 +1,4 @@
-# Trlmdb
+# Trlmdb(time replicating lightning memory database)
 
 Trlmdb (time replicating lightning memory datadase) is a database built on top of LMDB (lightning memory database).
 Trlmdb is a key-value store where eack put or get operation is time stamped and replicated to remote nodes.
