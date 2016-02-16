@@ -57,6 +57,14 @@ Further details are described below.
 
 ## API
 
+#### Return values
+
+Most of the functions in the API return an int as a status code. In those cases, 0 denotes success and a non-zero
+value denotes failure or absence.
+The non-zero values are ENOMEM for memory allocation failure, and the LMDB return codes in other cases.
+
+The value MDB_NOTFOUND denotes the absence of a key. This return value is not really an error.
+
 
 #### Types
 The typedefs define opaque types that should be used through the functions below.  
@@ -80,8 +88,6 @@ number of LMDB databases used internally by trlmdb. To close the environment, ca
 
 * trlmdb_env **env 
 
-It returns 0 on success, and non-zero on failure.
-
 ```
 int trlmdb_env_create(trlmdb_env **env);
 ```
@@ -92,8 +98,6 @@ int trlmdb_env_create(trlmdb_env **env);
 
  * trlmdb_env created by `trlmdb_env_create`
  * size of the memory map. It must be a multiplum of the page size.
-
-It returns 0 on success, and non-zero on failure.
 
 ```
 int  trlmdb_env_set_mapsize(trlmdb_env *env, uint64_t size);
@@ -106,8 +110,6 @@ int  trlmdb_env_set_mapsize(trlmdb_env *env, uint64_t size);
  * path to directory of lmdb files.
  * flags goes directly through to lmdb, choosing 0 is fine.
  * mode unix file modes, 0644 is fine.
-
-It returns 0 on succes, non-zero on failure.
 
 ```
 int trlmdb_env_open(trlmdb_env *env, const char *path, unsigned int flags, mdb_mode_t mode);
@@ -129,8 +131,6 @@ void trlmdb_env_close(trlmdb_env *env);
 * flags, same flags as mdb_txn_begin, 0 is read and write, MDB_RDONLY for read only.
 * txn, a trlmdb_txn object will be created and returned in this pointer argument.
  
-It returns 0 on succes, non-zero on failure. 
-
 ```
 int trlmdb_txn_begin(trlmdb_env *env, unsigned int flags, trlmdb_txn **txn); 
 ```
@@ -167,8 +167,6 @@ void trlmdb_txn_abort(trlmdb_txn *txn);
     } MDB_val;
  * value, the result will be available in value. Copy the buffer before the transaction is done if the result is needed.
 
-It returns 0 on success, non-zero on failure.
-
  ```
 int trlmdb_get(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
 ```
@@ -181,8 +179,6 @@ int trlmdb_get(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
  * key, a byte buffer and a length in an MDB_val struct.
  * value, the value to store in trlmdb.
 
-It returns 0 on success, non-zero on failure.
-
  ```
 int trlmdb_put(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
 ```
@@ -194,37 +190,34 @@ int trlmdb_put(trlmdb_txn *txn, char *table, MDB_val *key, MDB_val *value);
  * table, a null-terminated string
  * key, a byte buffer and a length in an MDB_val struct.
 
-It returns 0 on success, ENOMEM if memory allocation fails, LMDB error codes for mdb_del. 
-
  ```
 int trlmdb_del(trlmdb_txn *txn, char *table, MDB_val *key);
 ```
 
-#### Opewn cursor for table
+#### Open cursor for table
 `trlmdb_cursor_open` opens a cursor that can be used to traverse a table.
  
  * txn, an open transaction
  * table, the table to traverse.
  * cursor, a pointer to the cursor to create
 
-It returns 0 on success, ENOMEM if memory allocation failed.
-
  ```
 int trlmdb_cursor_open(trlmdb_txn *txn, char *table, trlmdb_cursor **cursor);
 ```
 
 #### Close cursor for table
-trlmdb_cursor_close closes the cursor
- * @param[in] cursor
+`trlmdb_cursor_close` closes the cursor
+ 
+ * cursor
 
 ```
 void trlmdb_cursor_close(trlmdb_cursor *cursor);
 ```
 
 #### Position cursor at start of table
-trlmdb_cursor_first positions the cursor at the first key in the table used to open the cursor.
- * @param[in] cursor.
- * @return 0 on success, MDB_NOTFOUND if the table is empty.
+`trlmdb_cursor_first` positions the cursor at the first key in the table used to open the cursor.
+
+ * cursor.
 
  ```
 int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
@@ -232,8 +225,8 @@ int trlmdb_cursor_first(struct trlmdb_cursor *cursor);
 
 #### Position cursor at end of table
 trlmdb_cursor_last positions the cursor at the last key in the table.
- * @param[in] cursor.
- * @return 0 on success, MDB_NOTFOUND if the table is empty.
+
+ * cursor.
 
  ```
 int trlmdb_cursor_last(struct trlmdb_cursor *cursor);
@@ -249,31 +242,64 @@ int trlmdb_cursor_next(struct trlmdb_cursor *cursor);
 ```
 
 #### Move cursor to previous element
-trlmdb_cursor_prev positions the cursor at the previous key in the table.
- * @param[in] cursor.
- * @return 0 on success, MDB_NOTFOUND if the end of the table has been reached.
+`trlmdb_cursor_prev` positions the cursor at the previous key in the table.
+ * cursor.
 
  ```
 int trlmdb_cursor_prev(struct trlmdb_cursor *cursor);
 ```
 
 #### Get key/value for cursor
-trlmdb_cursor_get gets the key and value for current cursor.
- * @param[in] cursor.
- * @param[out] key, the current key is placed in the MDB_val key.
- * @param[out] val, the current value is placed in the MDB_val val.
- * @return 0 on success, MDB_NOTFOUND if the key, value is absent.
- *   MDB_NOTFOUND will only be returned if one of the four functions above 
- *   returned MDB_NOTFOUND. 
+`trlmdb_cursor_get` gets the key and value for current cursor.
+ 
+ * cursor.
+ * key, the current key is placed in the MDB_val key.
+ * val, the current value is placed in the MDB_val val.
 
 ```
 int trlmdb_cursor_get(struct trlmdb_cursor *cursor, MDB_val *key, MDB_val *val);
 ```
 
-
 ## Example API usage
 
+See the files `test_single.c` and `test_multi.c` for examples
+
+A simple example is shown here
+
+```
+int rc = 0;
+
+trlmdb_env *env;
+rc = trlmdb_env_create(&env);
+assert(!rc);
+
+rc = trlmdb_env_open(env_1, './database_dir', 0, 0644);
+assert(!rc);
+
+trlmdb_txn *txn;
+rc = trlmdb_txn_begin(env_1, 0, &txn);
+assert(!rc);
+
+char *table_1 = "table-1";
+MDB_val key_1 = {5, "key_1"};
+MDB_val val_1 = {5, "val_1"};
+                                        
+rc = trlmdb_put(txn, table_1, &key_1, &val_1);
+assert(!rc);
+
+MDB_val val_2;
+rc = trlmdb_get(txn, table_1, &key_1, &val_2);
+assert(!rc);
+assert(!cmp_mdb_val(&val_1, &val_2));
+
+rc = trlmdb_txn_commit(txn);
+assert(!rc);
+```
+
+Assert is used to illustrate the expected return values. 
+
 ## Replicator usage
+
 
 
 ## Detailed explanation of trlmdb
