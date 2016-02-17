@@ -489,20 +489,21 @@ The replicator sends messages to the remote node based on its knowledge. The rul
 | ff                | "time" "tf" time key [value] |
 | ft                | does not happen |
 
-The value is only sent of the time stamp comes from a put operation.
+The value is only sent if the time stamp comes from a put operation.
 
 The typical scenario is that the application insert time,key, value and the flag "ff". The replicator sends "tf" and the remote node replies "tt". The remote node changes the flag to "tt" after sending the message to minimize network trafic. If the message is lost, the local node will resend "tf" in any case.  
 
-
 ##### The replicator event loop
 
+Each connection is handled in its own thread, so this description applies to a single connection.
 
+The replicator performs various tasks. It seraches the db_node_time table and prepares messages, it sends messages to the network, it reads message from the network into a buffer, it reads the messages and updates the database, it polls the kernel for read and write events on the network, and it goes to sleep when there is no work to do.
 
+The replicator performs the tasks in an event loop. The replicator has an internal state, and after every task or network poll it updates the state.
 
+Replicators perform tasks in a given order. They always read as much as possible from the network. This minimizes network congestion. If replicators were eager to write before reading, they could get into a situation where messages were filling up buffers and the network and no one wanted to read them. Secondly, if replicators wrote before reading, they might miss some information that could eliminate the need to write. Replicators always read and incorporate known information before they write. When replicators can not progress they poll the network for reading with a timeout. In other words, they wait for incoming messages or the timeout. After the timout, they check the databsase to see if the application has written into it. This is done by checking the table db_node_time. The reason that the flag "tt" is represented by absence in the table db_node_time is that the replicator immediately can see that the table is empty, and go back to sleep. This means that there is as little cpu time wasted in case of no activity.
 
-
-
-
+The poll timeout is set in the configuration file. It is application specific. A small timeout wakes the replicator up too often. A long timeout means that after a period of inactivity, there is a long delay before a remote node sees a new value. The ideal solution to this problem would be for the application to signal the replicator, but that is not implemented right now. 
 
 ## Robustness
 
