@@ -1,27 +1,27 @@
 # Trlmdb(time replicating lightning memory database)
 
 Trlmdb is a database built on top of LMDB (lightning memory database, http://symas.com/mdb/doc/index.html).
-Trlmdb is a key-value store where eack put or get operation is time stamped and replicated to remote nodes.
+Trlmdb is a key-value store where each put or get operation is time stamped and replicated to remote nodes.
 
 ## Programming language 
 Trlmdb is written in C.
 
 ## Two parts
-Trlmdb consists of two parts: An API that applications must use to access the database and an executable program, the replicator, that replocates the databasse to remote nodes.
+Trlmdb consists of two parts: An API that applications must use to access the database and an executable program, the replicator, that replicates the database to remote nodes.
 
 ## Platform
 Trlmdb runs on Posix compliant platforms such as Linux, Unix, and Mac OS X. Trlmdb has not been tested on Windows.
-Only minor changes shopuld be necessary to make trlmdb work on Windows.
+Only minor changes should be necessary to make trlmdb work on Windows.
 
 ## Dependencies
-The only dependency, besides a Poix platform, is LMDB. The relevant LMDB files are included in the repository, so 
+The only dependency, besides a Posix platform, is LMDB. The relevant LMDB files are included in the repository, so 
 no additional installations are needed. 
 
 ## License
-The license is the MIT license described in the file LICENSE. LMDB comes with itw own license which is 
+The license is the MIT license described in the file LICENSE. LMDB comes with its own license which is 
 described in the file LMDB_LICENSE. 
 
-##Intallation
+##Installation
 Clone the git repository and run 
 
 ```
@@ -40,7 +40,7 @@ The details are described below.
 
 Check the files test_single.c and test_multi.c for examples of how to use trlmdb.
 
-The file trmldmb.c contains the source code for both the API and the replicator.
+The file trlmdb.c contains the source code for both the API and the replicator.
 The header file trlmdb.h contains the API types and functions.
 
 ## Brief overview of trlmdb
@@ -71,7 +71,7 @@ The value MDB_NOTFOUND denotes the absence of a key. This return value is not re
 #### Types
 The typedefs define opaque types that should be used through the functions below.  
 The types are extended versions of the equivalent data structures in LMDB.
-A trlmdb_env environemnt is used to access a given database.  
+A trlmdb_env environment is used to access a given database.  
 A trlmdb_txn transaction is used to access the database in an atomic manner.
 A cursor is used to traverse a table.
 
@@ -84,7 +84,7 @@ typedef struct trlmdb_cursor trlmdb_cursor;
 
 #### Create environment
 `trlmdb_create_env` is the first function to call. It creates an MDB_env, generates a random id
-associated with each trlmd environment, and sets the number of LMDB databases to 5, which is the
+associated with each trlmdb environment, and sets the number of LMDB databases to 5, which is the
 number of LMDB databases used internally by trlmdb. To close the environment, call
 `trlmdb_env_close`. Before the environment may be used, it must be opened using `trlmdb_env_open`.
 
@@ -94,19 +94,19 @@ number of LMDB databases used internally by trlmdb. To close the environment, ca
 int trlmdb_env_create(trlmdb_env **env);
 ```
 
-#### Set mapsize
+#### Set map size
 `trlmdb_env_set_mapsize` sets the total size of the memory map.
 `trlmdb_env_set_mapsize` calls directly through to the equivalent lmdb function.
 
  * trlmdb_env created by `trlmdb_env_create`
- * size of the memory map. It must be a multiplum of the page size.
+ * size of the memory map. It must be a multiple of the page size.
 
 ```
 int  trlmdb_env_set_mapsize(trlmdb_env *env, uint64_t size);
 ```
 
 #### Open environment
-`trlmdb_env_open` opens the lmdb environment and opens the internal databases used bny trlmdb.
+`trlmdb_env_open` opens the lmdb environment and opens the internal databases used by trlmdb.
   
  * trlmdb_env created by trlmdb_env_create
  * path to directory of lmdb files.
@@ -142,7 +142,7 @@ int trlmdb_txn_begin(trlmdb_env *env, unsigned int flags, trlmdb_txn **txn);
  
  * txn, the open transaction. 
 
-It returns 0 on succes, non-zero on failure.
+It returns 0 on success, non-zero on failure.
 
  ```
 int  trlmdb_txn_commit(trlmdb_txn *txn);
@@ -326,14 +326,14 @@ Lines have the form
 name = value
 ```
 
-with a set of prdefined names. All other types of lines are ignored.
+with a set of predefined names. All other types of lines are ignored.
 The names are
 
 `node` is a string denoting the name of the node, e.g., node-1. `node` should occur exactly once.
 
 `database` is the directory of the LMDB database, `database` should occur exactly once.
 
-`timeout` is the waiting time in milliseconds before the replicator checks the database for updates after finishing all jobs. The replicator keeps working as long as there is work for it to do. When, the replicator is done, it waits a for the period timeout before it queires the database to see if there are changes since last. If there are changes, it will send them to the remote nodes. The advantage of a short timeout is that remote nodes will get their updates faster. The disadvantage is that CPU power is used. For very busy applications, the timout will be irrelevant, because the replicator never goes to sleep. The default value is 1000.
+`timeout` is the waiting time in milliseconds before the replicator checks the database for updates after finishing all jobs. The replicator keeps working as long as there is work for it to do. When, the replicator is done, it waits a for the period timeout before it queries the database to see if there are changes since last. If there are changes, it will send them to the remote nodes. The advantage of a short timeout is that remote nodes will get their updates faster. The disadvantage is that CPU power is used. For very busy applications, the timeout will be irrelevant, because the replicator never goes to sleep. The default value is 1000.
 
 `port` is the listening port for the server part of the replicator. The replicator will accept incoming tcp connections on this port. `port` should occur at most once. If `port` is absent, the replicator will not act as a server.
 
@@ -354,7 +354,7 @@ of length 4, 4, 4, and 8 bytes
 ```
 time(20) = seconds-since-epoch(4) fraction-seconds(4) environment-id(4) counter(8)
 ```
-The first two are set at the beginning of each transaction. The environment-id is set at the creation of the environment. The counter is set to zero at the beginning of each transaction and incremented by two at every operation. The last bit of th counter is 1 for a put operation and 0 for s delete operation. The last part is long to avoid overflows in very very long transactions. 
+The first two are set at the beginning of each transaction. The environment-id is set at the creation of the environment. The counter is set to zero at the beginning of each transaction and incremented by two at every operation. The last bit of the counter is 1 for a put operation and 0 for s delete operation. The last part is long to avoid overflows in very very long transactions. 
 
 Time stamps are unique. It is unlikely that two distinct nodes start a transaction at the same time, and if they do the environment ids are unlikely to be equal. The environment ids are randomly chosen. The time precision is below a nano second. 
 
@@ -396,11 +396,11 @@ The table db_nodes has remote node names as keys and empty values.
 
 The table db_node_time has concatenated node names and time stamps as keys and two byte flags as values.
 This table is used by the replicator to keep track of remote nodes.
-The two byte flags can be either "ff", "ft", "tf", where f is false and t is true. The meaning of the flgas is explained below. Absence of a node-time is defined to have the same meaning as the flag "tt". So, for purely performance reasons, the flag "tt" is never used. 
+The two byte flags can be either "ff", "ft", "tf", where f is false and t is true. The meaning of the flags is explained below. Absence of a node-time is defined to have the same meaning as the flag "tt". So, for purely performance reasons, the flag "tt" is never used. 
 
 #### Put operations
 
-A put operation has a (extended) key and a value. The time stamp is calculated and the last bit is 1. During a put operation, the (time, key) pair inserted in db_time_to_key, the (time, value) pair is inserted in (time, value). The (key, time) pair is insereted in db_key_to_time unless there already is a more recent time for that key. When an application calls `trlmdb_put` the time stamp will almost always be the most recent one. The only exception would be if a remote node is inserting the same key a little later, and the replicator works fast, and there is a problem with the clocks.
+A put operation has a (extended) key and a value. The time stamp is calculated and the last bit is 1. During a put operation, the (time, key) pair inserted in db_time_to_key, the (time, value) pair is inserted in (time, value). The (key, time) pair is inserted in db_key_to_time unless there already is a more recent time for that key. When an application calls `trlmdb_put` the time stamp will almost always be the most recent one. The only exception would be if a remote node is inserting the same key a little later, and the replicator works fast, and there is a problem with the clocks.
 
 Furthermore, for each node in db_nodes, the concatenated node-time is inserted in db_node_time with value of "ff".
 
@@ -422,19 +422,19 @@ Cursors work by mapping to cursors of LMDB and keeping track of the null termina
 #### The replicator
 
 A replicator is associated with a database and has a node name. At start up, the replicator reads the configuration file. Part of the configuration file is a specification of the remote nodes that this replicator can communicate with.
-The replicator opens the database and checks whwether all nodes from the configuration file are present in db_nodes. Those nodes that are absent are inserted into db_node, and for every time in db_time_to_key, the concatenated key node-time is inserted into db_node_time with value "ff".
+The replicator opens the database and checks whether all nodes from the configuration file are present in db_nodes. Those nodes that are absent are inserted into db_node, and for every time in db_time_to_key, the concatenated key node-time is inserted into db_node_time with value "ff".
 
 ##### Tcp connections
 
-The replicators communicate throught tcp connections. A replicator can act as a server, a client, or both.
+The replicators communicate through tcp connections. A replicator can act as a server, a client, or both.
 The replicators communicate with messages encoded in a simple custom format.
 
 ```
-message = total-lengt field-1-length field-1 field-2-length field-2 ...
+message = total-length field-1-length field-1 field-2-length field-2 ...
 ```
 
 The first field denotes the message type. There are two message types right now, "node" and "time".
-At connection establishment, "node" messages are sent and received. The "node" messages are used for both nodesa to establish the identity of the remote node on that connection. If the remote node is not mentioned in the configuration file, the tcp connection is closed and an error message is printed to stderr.
+At connection establishment, "node" messages are sent and received. The "node" messages are used for both nodes to establish the identity of the remote node on that connection. If the remote node is not mentioned in the configuration file, the tcp connection is closed and an error message is printed to stderr.
 
 After identity establishment, all messages are of type "time".
 
@@ -470,7 +470,7 @@ second-byte-of-flag-in-db_node_time = local knows that remote knows that local k
 
 When the application performs an operation, the flag is set to "ff" because the remote node knows nothing at all.
 The goal of the replicator is to make the flag "tt" which is the same as absent in db_node_time. When db_node_time
-is mepty, there is nothing to do for the replicator besides waiting for the application or messages from remote nodes.
+is empty, there is nothing to do for the replicator besides waiting for the application or messages from remote nodes.
 
 
 In a time message the meaning of the flags is
@@ -491,25 +491,25 @@ The replicator sends messages to the remote node based on its knowledge. The rul
 
 The value is only sent if the time stamp comes from a put operation.
 
-The typical scenario is that the application insert time,key, value and the flag "ff". The replicator sends "tf" and the remote node replies "tt". The remote node changes the flag to "tt" after sending the message to minimize network trafic. If the message is lost, the local node will resend "tf" in any case.  
+The typical scenario is that the application insert time,key, value and the flag "ff". The replicator sends "tf" and the remote node replies "tt". The remote node changes the flag to "tt" after sending the message to minimize network traffic. If the message is lost, the local node will resend "tf" in any case.  
 
 ##### The replicator event loop
 
 Each connection is handled in its own thread, so this description applies to a single connection.
 
-The replicator performs various tasks. It seraches the db_node_time table and prepares messages, it sends messages to the network, it reads message from the network into a buffer, it reads the messages and updates the database, it polls the kernel for read and write events on the network, and it goes to sleep when there is no work to do.
+The replicator performs various tasks. It searches the db_node_time table and prepares messages, it sends messages to the network, it reads message from the network into a buffer, it reads the messages and updates the database, it polls the kernel for read and write events on the network, and it goes to sleep when there is no work to do.
 
 The replicator performs the tasks in an event loop. The replicator has an internal state, and after every task or network poll it updates the state.
 
-Replicators perform tasks in a given order. They always read as much as possible from the network. This minimizes network congestion. If replicators were eager to write before reading, they could get into a situation where messages were filling up buffers and the network and no one wanted to read them. Secondly, if replicators wrote before reading, they might miss some information that could eliminate the need to write. Replicators always read and incorporate known information before they write. When replicators can not progress they poll the network for reading with a timeout. In other words, they wait for incoming messages or the timeout. After the timout, they check the databsase to see if the application has written into it. This is done by checking the table db_node_time. The reason that the flag "tt" is represented by absence in the table db_node_time is that the replicator immediately can see that the table is empty, and go back to sleep. This means that there is as little cpu time wasted in case of no activity.
+Replicators perform tasks in a given order. They always read as much as possible from the network. This minimizes network congestion. If replicators were eager to write before reading, they could get into a situation where messages were filling up buffers and the network and no one wanted to read them. Secondly, if replicators wrote before reading, they might miss some information that could eliminate the need to write. Replicators always read and incorporate known information before they write. When replicators can not progress they poll the network for reading with a timeout. In other words, they wait for incoming messages or the timeout. After the timeout, they check the database to see if the application has written into it. This is done by checking the table db_node_time. The reason that the flag "tt" is represented by absence in the table db_node_time is that the replicator immediately can see that the table is empty, and go back to sleep. This means that there is as little cpu time wasted in case of no activity.
 
 The poll timeout is set in the configuration file. It is application specific. A small timeout wakes the replicator up too often. A long timeout means that after a period of inactivity, there is a long delay before a remote node sees a new value. The ideal solution to this problem would be for the application to signal the replicator, but that is not implemented right now. 
 
 ## Robustness
 
-Trlmdb is built to be robust. LMDB is crash resistent due to its transactional system. If nodes crash, they can just be restarted. The worst case is that some messages are unnecessarily sent multiple times.
+Trlmdb is built to be robust. LMDB is crash resistant due to its transactional system. If nodes crash, they can just be restarted. The worst case is that some messages are unnecessarily sent multiple times.
 
-The application and replicator share one database in order to achieve robustness. If replicators had their own persistent database, a system crash could lead to an incosistent state.
+The application and replicator share one database in order to achieve robustness. If replicators had their own persistent database, a system crash could lead to an inconsistent state.
 
 
 ## Performance
@@ -528,7 +528,7 @@ lmdb, 1000 reads, one transaction per read, duration = 0.000761 seconds
 lmdb, 1000 reads, one transaction in total, duration = 0.000554 seconds
 ```
 
-LMDB is around 5 times faster than TRLMDB which is consistent with the amount of extra work trlmdb. These timings do not include replication or insertions in the table `node_time`. The LMDB insertions in one transaction are abnormally fast, which is probably because the insertions in this test are sequential appendings.   
+LMDB is around 5 times faster than TRLMDB which is consistent with the amount of extra work trlmdb. These timings do not include replication or insertions in the table `node_time`. The LMDB insertions in one transaction are abnormally fast, which is probably because the insertions in this test are sequential appends.   
 
 ## History
 
@@ -540,12 +540,12 @@ Besides replication, trlmdb keeps a full history of all operations. Many applica
 Trlmdb is an eventually consistent database; it is possible that a read at one node can return an old result that
 has been updated at another node. This happens when the read takes place in between the remote update and the arrival of the message containing the new result. 
 
-We believe that many applications only need eventual consistency. Trlmdb always accepts client updates immediately. A fully consistent systemt would have to block updates until messages have been sent back and forth.  
+We believe that many applications only need eventual consistency. Trlmdb always accepts client updates immediately. A fully consistent system would have to block updates until messages have been sent back and forth.  
 
 
 ## Time in databases
 
-It is often said that time is unreliable and should not be used in database design. We disagree with that. Time is a quite remarkable property that gives a unique ordering between remote events. Without time, there would be no way to order distributed events that took place in between messages. Clocks are a way of subdividing the time between messages. 
+It is often said that time is unreliable and should not be used in database design. We are of a different opinion. Time is a quite remarkable property that gives a unique ordering between remote events. Without time, there would be no way to order distributed events that took place in between messages. Clocks are a way of subdividing the time between messages. 
 
 Not using time in databases throws away a very useful piece of information. It is true that clocks can be faulty, but disregarding time for that reason is overkill.It is known how to synchronize clocks and they are actually very reliable. Time synchronization could have been built into the replicators. However, we feel that is best done by a designated system.
 
@@ -553,14 +553,14 @@ Time ordering is also what a user would naively expect. If the same key is updat
 
 ## The theory of relativity
 
-Suppose that two separated nodes recieve an update to the same key at spacetime points with a spacelike separation.
+Suppose that two separated nodes receive an update to the same key at spacetime points with a space like separation.
 The ordering of the updates depend on exactly what we mean by time at the nodes. Different choices of reference frames 
 would lead to different orderings. In other words, the final value in the database is reference frame dependent.
 
 In ordinary settings, the nodes are at rest relative to the earth and will be calibrated to some earth defined reference frame.
 
-Suppose the distributed nodes move in space, and that they travel through strong gravitational fields. In that case, there are several possibilities for the tme used in the tie stamps. One natural possibility is to use local clocks at each node. In that case, all database operations that took place in a node that went through a strong gravitational field will be classfied as early. This means that some other nodes will create all the recent updates. When the nodes meet again, the node that went through strong gravitational fields or traveled at high speeds, will only have old udates written directly to it.    
+Suppose the distributed nodes move in space, and that they travel through strong gravitational fields. In that case, there are several possibilities for the time used in the time stamps. One natural possibility is to use local clocks at each node. In that case, all database operations that took place in a node that went through a strong gravitational field will be classified as early. This means that some other nodes will create all the recent updates. When the nodes meet again, the node that went through strong gravitational fields or traveled at high speeds, will only have old updates written directly to it.    
 
-Other possible time schemes would be possible. For instance, the nodes could use time stamps corresponsing to a given reference frame at their own spacetime position.
+Other possible time schemes would be possible. For instance, the nodes could use time stamps corresponding to a given reference frame at their own spacetime position.
 
-It is interesting that a time replicating database has many of the same ambiguites with respect to ordering of remote events as spacetime itself.
+It is interesting that a time replicating database has many of the same ambiguities with respect to ordering of remote events as spacetime itself.
