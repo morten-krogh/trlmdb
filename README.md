@@ -551,3 +551,16 @@ Not using time in databases throws away a very useful piece of information. It i
 
 Time ordering is also what a user would naively expect. If the same key is updated at two remote nodes, a user would expect the later one to become the final value.
 
+## The theory of relativity
+
+Suppose that two separated nodes recieve an update to the same key at spacetime points with a spacelike separation.
+The ordering of the updates depend on exactly what we mean by time at the nodes. Different choices of reference frames 
+would lead to different orderings. In other words, the final value in the database is reference frame dependent.
+
+In ordinary settings, the nodes are at rest relative to the earth and will be calibrated to some earth defined reference frame.
+
+Suppose the distributed nodes move in space, and that they travel through strong gravitational fields. In that case, there are several possibilities for the tme used in the tie stamps. One natural possibility is to use local clocks at each node. In that case, all database operations that took place in a node that went through a strong gravitational field will be classfied as early. This means that some other nodes will create all the recent updates. When the nodes meet again, the node that went through strong gravitational fields or traveled at high speeds, will only have old udates written directly to it.    
+
+Other possible time schemes would be possible. For instance, the nodes could use time stamps corresponsing to a given reference frame at their own spacetime position.
+
+It is interesting that a time replicating database has many of the same ambiguites with respect to ordering of remote events as spacetime itself.
