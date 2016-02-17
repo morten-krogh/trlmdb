@@ -354,22 +354,111 @@ of length 4, 4, 4, and 8 bytes
 ```
 time(20) = seconds-since-epoch(4) fraction-seconds(4) environment-id(4) counter(8)
 ```
-The first two are set at the beginning of each transaction. Theenvironment-id is set at the creation of the environment. The counter is set to zero at the beginning of each transaction and incremented by two at every operation. The last bit of th counter is 1 for a put operation and 0 for s delete operation. The last part is long to avoid overflows in very very long transactions. 
+The first two are set at the beginning of each transaction. The environment-id is set at the creation of the environment. The counter is set to zero at the beginning of each transaction and incremented by two at every operation. The last bit of th counter is 1 for a put operation and 0 for s delete operation. The last part is long to avoid overflows in very very long transactions. 
 
 Time stamps are unique. It is unlikely that two distinct nodes start a transaction at the same time, and if they do the environment ids are unlikely to be equal. The environment ids are randomly chosen. The time precision is below a nano second. 
 
+#### Multiple tables
+
+The API for trlmdb allows key/value pairs to be inserted in named tables. At a low level, trlmdb only keeps track of one huge key-value table. The keys of the huge table are concatenations of the table name and the key.
+
+```
+extended-key = table-name null-byte key
+```
+
+Because a table name does not contain the null byte, there is a one to one mapping between extended key and table, key pairs. The ordering of extended keys place all extended keys belonging to the same table in consecutive order.
+  
+Because tables are just prefixes to extended keys, a table does not need to be created and destroyed; a table is automatically created when the first key is inserted.
+  
 #### LMDB databases
 
 A trlmdb database contains exactly 5 LMDB databases(dbi).
 
- * db_time_to_key
+##### db_time_to_key
+
+The table db_time_to_key has the 20 byte time stamps as keys and extended keys as values. 
+Every put or delete operation is recorded in this table.
  
- * db_time_to_data
+##### db_time_to_data
 
-* db_key_to_time"
+The table db_time_to_data has the 20 byte time stamps as keys and values as values.
+Every put operation is recorded in this table. Delete operations do not need to be recorded here, since the last bit of the time stamp denotes whether the operation is a put or delete operation. 
 
-* db_nodes
-* db_node_time
+##### db_key_to_time
+
+The table db_key_to_time has extended keys as values and the most recent time for that key as value.
+
+##### db_nodes
+
+The table db_nodes has remote node names as keys and empty values. 
+
+##### db_node_time
+
+The table db_node_time has concatenated node names and time stamps as keys and two byte flags as values.
+This table is used by the replicator to keep track of remote nodes.
+The two byte flags can be either "ff", "ft", "tf", where f is false and t is true. The meaning of the flgas is explained below. Absence of a node-time is defined to have the same meaning as the flag "tt". So, for purely performance reasons, the flag "tt" is never used. 
+
+#### Put operations
+
+A put operation has a (extended) key and a value. The time stamp is calculated and the last bit is 1. During a put operation, the (time, key) pair inserted in db_time_to_key, the (time, value) pair is inserted in (time, value). The (key, time) pair is insereted in db_key_to_time unless there already is a more recent time for that key. When an application calls `trlmdb_put` the time stamp will almost always be the most recent one. The only exception would be if a remote node is inserting the same key a little later, and the replicator works fast, and there is a problem with the clocks.
+
+Furthermore, for each node in db_nodes, the concatenated node-time is inserted in db_node_time with value of "ff".
+
+#### Delete operations
+
+A delete operation works as a put operation with the exception that nothing is inserted in db_time_to_data. The time stamp has its last bit set to 0.
+
+
+#### Get operations
+
+A get operation looks in the table db_key_to_time. If the key is absent in this table, the result MDB_NOTFOUND is returned. If a time stamp is found, the last bit is checked. If the last bit is zero, MDB_NOTFOUND is returned.
+If the last bit is one, the value is found in db_time_to_data.
+
+#### Cursors
+
+Cursors work by mapping to cursors of LMDB and keeping track of the null terminated prefix table name.
+
+
+#### The replicator
+
+A replicator is associated with a database and has a node name. At start up, the replicator reads the configuration file. Part of the configuration file is a specification of the remote nodes that this replicator can communicate with.
+The replicator opens the database and checks whwether all nodes from the configuration file are present in db_nodes. Those nodes that are absent are inserted into db_node, and for every time in db_time_to_key, the concatenated key node-time is inserted into db_node_time with value "ff".
+
+##### Tcp connections
+
+The replicators communicate throught tcp connections. A replicator can act as a server, a client, or both.
+The replicators communicate with messages encoded in a simple custom format.
+
+```
+message = total-lengt field-1-length field-1 field-2-length field-2 ...
+```
+
+The first field denotes the message type. There are two message types right now, "node" and "time".
+At connection establishment, "node" messages are sent and received. The "node" messages are used for both nodesa to establish the identity of the remote node on that connection. If the remote node is not mentioned in the configuration file, the tcp connection is closed and an error message is printed to stderr.
+
+After identity establishment, all messages are of type "time".
+
+##### Knowledge of a time stamp
+
+Time stamp are globally unique. The goal of a replicator is to make sure that all its remote peers know all time stamps that the replicator itself knows. Knowing a time stamp means knowing the time stamp and the corresponding key and value. There is only a value if the time stamp originates from a put operation. The last bit of the time stamp 
+encodes the put/delete type. 
+
+##### Time messages
+
+A time message has the form
+
+```
+time-message = "time" flags time [key] [value] 
+``` 
+
+where the presence of key and value depend on the flags.
+
+
+
+
+
+
+
 
 
 
