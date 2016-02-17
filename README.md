@@ -507,7 +507,9 @@ The poll timeout is set in the configuration file. It is application specific. A
 
 ## Robustness
 
+Trlmdb is built to be robust. LMDB is crash resistent due to its transactional system. If nodes crash, they can just be restarted. The worst case is that some messages are unnecessarily sent multiple times.
 
+The application and replicator share one database in order to achieve robustness. If replicators had their own persistent database, a system crash could lead to an incosistent state.
 
 
 ## Performance
@@ -533,6 +535,19 @@ LMDB is around 5 times faster than TRLMDB which is consistent with the amount of
 Besides replication, trlmdb keeps a full history of all operations. Many applications actually need the full history instead of just the current state. The history comes along for free as a by product of the time replication strategy. 
 
 
-## Time stamps and consistency
+## Consistency
 
-Key-value store replication using time stamps.
+Trlmdb is an eventually consistent database; it is possible that a read at one node can return an old result that
+has been updated at another node. This happens when the read takes place in between the remote update and the arrival of the message containing the new result. 
+
+We believe that many applications only need eventual consistency. Trlmdb always accepts client updates immediately. A fully consistent systemt would have to block updates until messages have been sent back and forth.  
+
+
+## Time in databases
+
+It is often said that time is unreliable and should not be used in database design. We disagree with that. Time is a quite remarkable property that gives a unique ordering between remote events. Without time, there would be no way to order distributed events that took place in between messages. Clocks are a way of subdividing the time between messages. 
+
+Not using time in databases throws away a very useful piece of information. It is true that clocks can be faulty, but disregarding time for that reason is overkill.It is known how to synchronize clocks and they are actually very reliable. Time synchronization could have been built into the replicators. However, we feel that is best done by a designated system.
+
+Time ordering is also what a user would naively expect. If the same key is updated at two remote nodes, a user would expect the later one to become the final value.
+
