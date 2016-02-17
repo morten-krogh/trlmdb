@@ -453,6 +453,48 @@ time-message = "time" flags time [key] [value]
 
 where the presence of key and value depend on the flags.
 
+##### The meaning of the flags
+
+The flags in the table db_node_time and in the time messages are related.
+
+In the db_node_time table, the first byte of the flag value for a given node-time pair denotes whether the local node knows that the remote knows the time stamp.
+
+```
+first-byte-of-flag-in-db_node_time = local knows that remote know the time stamp
+```
+The second byte of the flag denotes whether the local node knows that remote node knows that the local node knows the time stamp.
+
+```
+second-byte-of-flag-in-db_node_time = local knows that remote knows that local knows the time stamp
+````
+
+When the application performs an operation, the flag is set to "ff" because the remote node knows nothing at all.
+The goal of the replicator is to make the flag "tt" which is the same as absent in db_node_time. When db_node_time
+is mepty, there is nothing to do for the replicator besides waiting for the application or messages from remote nodes.
+
+
+In a time message the meaning of the flags is
+
+```
+first-byte-of-flag-in-time-message = local knows the time stamp
+second-byte-of-flag-in-time-message = local knows that remote knows the time stamp
+```
+
+The replicator sends messages to the remote node based on its knowledge. The rules are
+
+| db_node_time flag | time message |
+|-------------------|--------------|
+| tt                | no message   |
+| tf                | "time" "tt" time |
+| ff                | "time" "tf" time key [value] |
+| ft                | does not happen |
+
+The value is only sent of the time stamp comes from a put operation.
+
+The typical scenario is that the application insert time,key, value and the flag "ff". The replicator sends "tf" and the remote node replies "tt". The remote node changes the flag to "tt" after sending the message to minimize network trafic. If the message is lost, the local node will resend "tf" in any case.  
+
+
+##### The replicator event loop
 
 
 
@@ -462,6 +504,7 @@ where the presence of key and value depend on the flags.
 
 
 
+## Robustness
 
 
 
